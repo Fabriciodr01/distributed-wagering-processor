@@ -22,6 +22,9 @@ export function testEnvVars(options: {
     QUEUE_NAME_TRANSACTIONS: options.queues.transactions,
     QUEUE_NAME_DLQ: options.queues.dlq,
     QUEUE_NAME_EVENTS: options.queues.events,
+    // Consumidor e publisher ficam desligados por padrão: cada teste liga o que exercita.
+    RUN_CONSUMER: 'false',
+    RUN_OUTBOX_PUBLISHER: 'false',
     CONSUMER_WAIT_TIME_S: '1',
     OUTBOX_POLL_INTERVAL_MS: '100',
     PENDING_REF_POLL_INTERVAL_MS: '100',

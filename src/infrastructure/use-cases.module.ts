@@ -1,6 +1,13 @@
 import { Global, Module } from '@nestjs/common';
 import { CLOCK, type Clock } from '../application/ports/clock.port';
+import { PublishOutboxUseCase } from '../application/outbox/publish-outbox.usecase';
 import { ID_GENERATOR, type IdGenerator } from '../application/ports/id-generator.port';
+import {
+  EVENT_PUBLISHER,
+  type EventPublisher,
+  OUTBOX_STORE,
+  type OutboxStore,
+} from '../application/ports/outbox.port';
 import { UNIT_OF_WORK, type UnitOfWork } from '../application/ports/unit-of-work.port';
 import { GetWagerTransactionUseCase } from '../application/wagering/get-wager-transaction.usecase';
 import { ProcessWagerTransactionUseCase } from '../application/wagering/process-wager-transaction.usecase';
@@ -16,6 +23,7 @@ const USE_CASES = [
   ListWalletLedgerUseCase,
   ProcessWagerTransactionUseCase,
   GetWagerTransactionUseCase,
+  PublishOutboxUseCase,
 ];
 
 /**
@@ -56,6 +64,12 @@ const USE_CASES = [
       provide: GetWagerTransactionUseCase,
       inject: [UNIT_OF_WORK],
       useFactory: (uow: UnitOfWork) => new GetWagerTransactionUseCase(uow),
+    },
+    {
+      provide: PublishOutboxUseCase,
+      inject: [OUTBOX_STORE, EVENT_PUBLISHER, APP_CONFIG],
+      useFactory: (store: OutboxStore, publisher: EventPublisher, config: AppConfig) =>
+        new PublishOutboxUseCase(store, publisher, { baseDelayMs: 1000, maxDelayMs: config.outbox.maxBackoffMs }),
     },
   ],
   exports: USE_CASES,

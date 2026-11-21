@@ -10,6 +10,7 @@ import { WalletsHttpModule } from './infrastructure/http/wallets/wallets-http.mo
 import { HealthModule } from './infrastructure/observability/health.module';
 import { buildOrmOptions } from './infrastructure/persistence/mikro-orm.config';
 import { PersistenceModule } from './infrastructure/persistence/persistence.module';
+import { SqsModule } from './infrastructure/sqs/sqs.module';
 import { UseCasesModule } from './infrastructure/use-cases.module';
 import { WorkersModule } from './infrastructure/workers/workers.module';
 
@@ -26,6 +27,7 @@ export class AppModule {
           registerRequestContext: false,
         }),
         PersistenceModule,
+        SqsModule,
         UseCasesModule,
         HealthModule,
         WorkersModule,

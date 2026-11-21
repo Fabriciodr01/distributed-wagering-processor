@@ -4,7 +4,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { AppConfig } from '../../config/app-config';
 import { APP_CONFIG } from '../../config/config.module';
 import { resolveQueueUrl } from '../sqs/queue-setup';
-import { SQS_CLIENT } from '../sqs/sqs.module';
+import { SQS_CLIENT } from '../sqs/sqs.tokens';
 
 export type DependencyStatus = { status: 'up' } | { status: 'down'; error: string };
 
