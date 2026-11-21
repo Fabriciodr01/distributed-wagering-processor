@@ -28,35 +28,39 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
     return result.affectedRows === 1;
   }
 
+  /**
+   * Resultado e agendamento num único UPDATE: a linha passa de um estado coerente para
+   * outro, sem depender da ordem de comandos (depois de terminal, o trigger não deixa mudar).
+   * `next_attempt_at` usa o relógio do banco, que é o que os workers de todas as instâncias
+   * comparam, e o lease é liberado porque a avaliação que o reservou terminou.
+   */
   async update(transaction: WagerTransaction, options: TransactionUpdateOptions = {}): Promise<void> {
     const row = WagerTransactionMapper.fromDomain(transaction);
-    const { schedule } = options;
-    if (schedule) {
-      // Antes do status: depois de terminal, o trigger não deixa a linha mudar mais.
-      // Relógio do banco, que é o que os workers de todas as instâncias comparam. O lease é
-      // liberado porque a avaliação que o reservou terminou.
-      await this.em.execute(
-        `UPDATE wager_transactions
-            SET attempts = ?,
-                next_attempt_at = CASE WHEN ?::int IS NULL THEN next_attempt_at
-                                       ELSE now() + (?::int * interval '1 millisecond') END,
-                lease_until = NULL
-          WHERE id = ?`,
-        [schedule.attempts, schedule.nextAttemptInMs ?? null, schedule.nextAttemptInMs ?? null, transaction.id],
-      );
-    }
-    await this.em.nativeUpdate(
-      WagerTransactionRow,
-      { id: transaction.id },
-      {
-        status: row.status,
-        failureCode: row.failureCode,
-        resultingBalance: row.resultingBalance,
-        referenceTransactionId: row.referenceTransactionId,
-        processedAt: row.processedAt,
-        // Qualquer decisão encerra a avaliação que reservou a linha.
-        leaseUntil: null,
-      },
+    const attempts = options.schedule?.attempts ?? null;
+    const nextAttemptInMs = options.schedule?.nextAttemptInMs ?? null;
+    await this.em.execute(
+      `UPDATE wager_transactions
+          SET status = ?,
+              failure_code = ?,
+              resulting_balance = ?::numeric(20, 2),
+              reference_transaction_id = ?::uuid,
+              processed_at = ?::timestamptz,
+              attempts = COALESCE(?::int, attempts),
+              next_attempt_at = CASE WHEN ?::int IS NULL THEN next_attempt_at
+                                     ELSE now() + (?::int * interval '1 millisecond') END,
+              lease_until = NULL
+        WHERE id = ?`,
+      [
+        row.status,
+        row.failureCode,
+        row.resultingBalance,
+        row.referenceTransactionId,
+        row.processedAt,
+        attempts,
+        nextAttemptInMs,
+        nextAttemptInMs,
+        transaction.id,
+      ],
     );
   }
 
