@@ -22,7 +22,7 @@ import {
 } from '../errors';
 import type { Clock } from '../ports/clock.port';
 import type { IdGenerator } from '../ports/id-generator.port';
-import type { IngressSource, Telemetry } from '../ports/telemetry.port';
+import type { IngressSource, LockOperation, Telemetry } from '../ports/telemetry.port';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.port';
 import { type ReferenceRetryPolicy, referenceRetryDelayMs } from './reference-retry-policy';
 import {
@@ -233,7 +233,7 @@ export class ProcessWagerTransactionUseCase {
     transaction: WagerTransaction,
   ): Promise<WagerTransactionResult> {
     // 1. Trava a wallet antes de qualquer escrita: serializa tudo que mexe nela.
-    const wallet = await scope.wallets.findByIdForUpdate(command.walletId);
+    const wallet = await this.lockWallet(scope, command.walletId, 'submission');
     if (!wallet) throw new WalletNotFoundError(command.walletId);
 
     // 2. Reserva a idempotência. Conflito = replay (mesmo payload) ou 409 (payload diferente).
@@ -278,10 +278,23 @@ export class ProcessWagerTransactionUseCase {
   private async lockPending(scope: TransactionScope, transactionId: string) {
     const snapshot = await scope.transactions.findById(transactionId);
     if (snapshot?.status !== WagerTransactionStatus.PendingReference) return null;
-    const wallet = await scope.wallets.findByIdForUpdate(snapshot.walletId);
+    const wallet = await this.lockWallet(scope, snapshot.walletId, 'reprocess');
     const ticket = await scope.transactions.findPendingForUpdate(transactionId);
     if (!wallet || !ticket) return null;
     return { wallet, ticket };
+  }
+
+  /**
+   * `SELECT … FOR UPDATE` da wallet, medindo a espera. Observado na hora (não só depois do
+   * commit): a espera aconteceu mesmo que a tentativa seja desfeita ou estoure o lock_timeout.
+   */
+  private async lockWallet(scope: TransactionScope, walletId: string, operation: LockOperation): Promise<Wallet | null> {
+    const startedAt = performance.now();
+    try {
+      return await scope.wallets.findByIdForUpdate(walletId);
+    } finally {
+      this.telemetry.walletLockWait(operation, (performance.now() - startedAt) / 1000);
+    }
   }
 
   /** Grava o resultado e os eventos correspondentes na outbox (D-08). */

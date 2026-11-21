@@ -236,10 +236,32 @@ describe('métricas', () => {
       'wager_lock_conflicts_total',
       'outbox_lag_seconds',
       'wager_processing_duration_seconds',
+      'wager_wallet_lock_wait_seconds',
       'wallet_reconciliation_divergences_total',
     ]) {
       expect(exposition).toContain(`# TYPE ${name}`);
     }
+  });
+
+  test('disputa pela mesma wallet aparece no histograma de espera do lock', async () => {
+    const { baseUrl, wagering } = await setup({ DB_POOL_MAX: '20' });
+    const wallet = await wagering.createWallet('100.00');
+    const before = await scrape(baseUrl);
+    const countBefore = metricValue(before, 'wager_wallet_lock_wait_seconds_count', { operation: 'submission' });
+    const sumBefore = metricValue(before, 'wager_wallet_lock_wait_seconds_sum', { operation: 'submission' });
+
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () => wagering.submit(wagering.transaction(wallet, { money: brl('1.00') }))),
+    );
+    expect(results.every((res) => res.status === 200)).toBe(true);
+
+    const after = await scrape(baseUrl);
+    const count = metricValue(after, 'wager_wallet_lock_wait_seconds_count', { operation: 'submission' });
+    const sum = metricValue(after, 'wager_wallet_lock_wait_seconds_sum', { operation: 'submission' });
+    expect(count - countBefore).toBeGreaterThanOrEqual(20);
+    expect(sum - sumBefore).toBeGreaterThan(0);
+    // Com lock pessimista a disputa é espera, não conflito: nenhum timeout nem deadlock.
+    expect(metricValue(after, 'wager_lock_conflicts_total', { type: 'lock_timeout' })).toBe(0);
   });
 
   test('as métricas se movem com os cenários: status, duplicata, DLQ, retry, lock, lag e latência', async () => {

@@ -1,6 +1,6 @@
 # Ambiente de desenvolvimento: Postgres, MiniStack (SQS) e três instâncias da aplicação.
 #   bun run infra:up              -> só postgres + ministack (para rodar a app localmente)
-#   docker compose up -d --build  -> tudo, incluindo filas, migrations e app1..app3
+#   docker compose up -d --build --wait  -> tudo, incluindo filas, migrations e app1..app3 (espera ficarem healthy)
 
 x-app: &app
   build: .
@@ -23,6 +23,13 @@ x-app: &app
     migrate:
       condition: service_completed_successfully
   restart: unless-stopped
+
+# Readiness da instância (Postgres e SQS alcançáveis). Só nas apps: init-queues e migrate rodam e saem.
+x-app-healthcheck: &app-healthcheck
+  test: ["CMD", "bun", "-e", "fetch('http://localhost:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+  interval: 3s
+  timeout: 3s
+  retries: 20
 
 services:
   postgres:
@@ -67,16 +74,19 @@ services:
     <<: *app
     ports:
       - "3001:3000"
+    healthcheck: *app-healthcheck
 
   app2:
     <<: *app
     ports:
       - "3002:3000"
+    healthcheck: *app-healthcheck
 
   app3:
     <<: *app
     ports:
       - "3003:3000"
+    healthcheck: *app-healthcheck
 
 volumes:
   postgres-data:

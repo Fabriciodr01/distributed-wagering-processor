@@ -344,12 +344,15 @@ export class RecordingTelemetry implements Telemetry {
   processingDuration(source: string): void {
     this.calls.push(['processingDuration', source]);
   }
+  walletLockWait(operation: string): void {
+    this.calls.push(['walletLockWait', operation]);
+  }
   walletDivergence(report: { walletId: string; checkedEntries: number }): void {
     this.calls.push(['walletDivergence', report.walletId, report.checkedEntries]);
   }
 
-  /** Chamadas sem as de duração (o valor varia a cada execução). */
+  /** Chamadas sem as de duração e de espera de lock (o valor varia a cada execução). */
   signals(): Array<[string, ...unknown[]]> {
-    return this.calls.filter(([name]) => name !== 'processingDuration');
+    return this.calls.filter(([name]) => name !== 'processingDuration' && name !== 'walletLockWait');
   }
 }

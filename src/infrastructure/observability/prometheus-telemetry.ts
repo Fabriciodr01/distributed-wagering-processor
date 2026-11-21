@@ -4,6 +4,7 @@ import { OUTBOX_STORE, type OutboxStore } from '../../application/ports/outbox.p
 import type {
   IngressSource,
   LockConflictType,
+  LockOperation,
   RetryType,
   Telemetry,
 } from '../../application/ports/telemetry.port';
@@ -61,6 +62,14 @@ export class PrometheusTelemetry implements Telemetry {
     registers: [this.registry],
   });
 
+  private readonly lockWait = new Histogram({
+    name: 'wager_wallet_lock_wait_seconds',
+    help: 'Espera pelo lock da wallet (SELECT … FOR UPDATE), por operação',
+    labelNames: ['operation'] as const,
+    buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+    registers: [this.registry],
+  });
+
   private readonly divergences = new Counter({
     name: 'wallet_reconciliation_divergences_total',
     help: 'Reconciliações em que o saldo da wallet divergiu do ledger',
@@ -106,6 +115,10 @@ export class PrometheusTelemetry implements Telemetry {
 
   processingDuration(source: IngressSource, seconds: number): void {
     this.duration.observe({ source }, seconds);
+  }
+
+  walletLockWait(operation: LockOperation, seconds: number): void {
+    this.lockWait.observe({ operation }, seconds);
   }
 
   walletDivergence(report: { walletId: string; checkedEntries: number }): void {

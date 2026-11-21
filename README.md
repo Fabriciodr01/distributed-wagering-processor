@@ -20,10 +20,12 @@ bun run db:migrate
 bun run start:dev       # http://localhost:3000/health/ready
 ```
 
-Três instâncias contra o mesmo Postgres e MiniStack (portas 3001 a 3003):
+Três instâncias contra o mesmo Postgres e MiniStack (portas 3001 a 3003). O `--wait` só volta quando as filas e as migrations terminaram e `app1..app3` estão healthy (`/health/ready`):
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build --wait
+curl -s localhost:3001/health/ready   # idem 3002 e 3003
+docker compose down -v
 ```
 
 ## Testes
