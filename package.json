@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
-    "test:concurrency": "bun test --pass-with-no-tests tests/concurrency",
+    "test:concurrency": "bun test tests/concurrency",
     "test": "bun run test:unit && bun run test:integration && bun run test:concurrency",
     "check": "bun run typecheck && bun run test",
     "test:docker": "docker compose -f docker-compose.test.yml run --rm tests",
