@@ -7,7 +7,7 @@ import { GetWagerTransactionUseCase } from '../../../application/wagering/get-wa
 import { ProcessWagerTransactionUseCase } from '../../../application/wagering/process-wager-transaction.usecase';
 import { assertCanActAs, CurrentProvider, ProviderAuthGuard } from '../auth/provider-auth.guard';
 import { RequestValidationError } from '../errors/request-validation.error';
-import { uuidSchema } from '../validation/common.schemas';
+import { uuidSchema } from '../../contracts/common.schemas';
 import { ZodValidationPipe } from '../validation/zod-validation.pipe';
 import {
   presentSubmission,
@@ -21,7 +21,7 @@ import {
   idempotencyKeySchema,
   type WagerTransactionPayload,
   wagerTransactionPayloadSchema,
-} from './wagering.schemas';
+} from '../../contracts/wager-transaction.contract';
 
 @Controller()
 @UseGuards(ProviderAuthGuard)

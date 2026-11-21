@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { moneySchema, uuidSchema } from '../validation/common.schemas';
+import { moneySchema, uuidSchema } from '../../contracts/common.schemas';
 
 export const createWalletBodySchema = z.object({
   playerId: uuidSchema,

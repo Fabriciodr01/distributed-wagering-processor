@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { InvalidMoneyError } from '../../../domain/errors';
-import { Money } from '../../../domain/money';
+import { InvalidMoneyError } from '../../domain/errors';
+import { Money } from '../../domain/money';
 
 /** A regra de formato é a do próprio Money: a borda não duplica a validação do domínio. */
 export const moneySchema = z
