@@ -7,6 +7,8 @@ export enum ApiErrorCode {
   ExternalTransactionConflict = 'EXTERNAL_TRANSACTION_CONFLICT',
   WalletAlreadyExists = 'WALLET_ALREADY_EXISTS',
   NotFound = 'NOT_FOUND',
+  Unauthorized = 'UNAUTHORIZED',
+  ProviderNotAllowed = 'PROVIDER_NOT_ALLOWED',
   ServiceUnavailable = 'SERVICE_UNAVAILABLE',
   InternalError = 'INTERNAL_ERROR',
 }

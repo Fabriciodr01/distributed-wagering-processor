@@ -1,7 +1,12 @@
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { describe, expect, test } from 'bun:test';
 import {
+  ExternalTransactionConflictError,
+  IdempotencyKeyConflictError,
   InvalidCursorError,
+  InvalidWagerRequestError,
+  ProviderNotAllowedError,
+  TransactionNotFoundError,
   TransientFailureError,
   WalletAlreadyExistsError,
   WalletNotFoundError,
@@ -18,6 +23,12 @@ describe('mapeamento de erros para HTTP', () => {
     ['wallet duplicada', new WalletAlreadyExistsError('p', 'BRL'), 409, 'WALLET_ALREADY_EXISTS'],
     ['falha transitória', new TransientFailureError('lock_timeout'), 503, 'SERVICE_UNAVAILABLE'],
     ['rota inexistente', new NotFoundException(), 404, 'NOT_FOUND'],
+    ['requisição de transação inválida', new InvalidWagerRequestError('x'), 400, 'VALIDATION_ERROR'],
+    ['transação inexistente', new TransactionNotFoundError(), 404, 'TRANSACTION_NOT_FOUND'],
+    ['chave com outro payload', new IdempotencyKeyConflictError('p', 't'), 409, 'IDEMPOTENCY_KEY_CONFLICT'],
+    ['externalId com outro payload', new ExternalTransactionConflictError('p', 't'), 409, 'EXTERNAL_TRANSACTION_CONFLICT'],
+    ['provider não autorizado', new ProviderNotAllowedError('p'), 403, 'PROVIDER_NOT_ALLOWED'],
+    ['sem credencial', new UnauthorizedException(), 401, 'UNAUTHORIZED'],
   ])('%s → %p %s', (_, exception, status, code) => {
     const mapped = toHttpError(exception);
     expect(mapped.status).toBe(status);

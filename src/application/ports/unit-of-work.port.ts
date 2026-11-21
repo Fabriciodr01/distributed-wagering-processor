@@ -1,4 +1,9 @@
-import type { LedgerRepository, WagerTransactionRepository, WalletRepository } from './repositories.port';
+import type {
+  LedgerRepository,
+  OutboxRepository,
+  WagerTransactionRepository,
+  WalletRepository,
+} from './repositories.port';
 
 export const UNIT_OF_WORK = Symbol('UNIT_OF_WORK');
 
@@ -7,6 +12,7 @@ export interface TransactionScope {
   readonly wallets: WalletRepository;
   readonly transactions: WagerTransactionRepository;
   readonly ledger: LedgerRepository;
+  readonly outbox: OutboxRepository;
 }
 
 export interface UnitOfWorkOptions {

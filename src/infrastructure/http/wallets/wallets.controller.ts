@@ -1,7 +1,8 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { CreateWalletUseCase } from '../../../application/wallets/create-wallet.usecase';
 import { GetWalletUseCase } from '../../../application/wallets/get-wallet.usecase';
 import { ListWalletLedgerUseCase } from '../../../application/wallets/list-wallet-ledger.usecase';
+import { ProviderAuthGuard } from '../auth/provider-auth.guard';
 import { walletIdParamSchema } from '../validation/common.schemas';
 import { ZodValidationPipe } from '../validation/zod-validation.pipe';
 import {
@@ -18,6 +19,7 @@ import {
 } from './wallets.schemas';
 
 @Controller('wallets')
+@UseGuards(ProviderAuthGuard)
 export class WalletsController {
   constructor(
     private readonly createWallet: CreateWalletUseCase,

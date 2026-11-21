@@ -10,6 +10,7 @@ import type { AppConfig } from '../../config/app-config';
 import { APP_CONFIG } from '../../config/config.module';
 import { classifyTransient } from './database-errors';
 import { MikroOrmLedgerRepository } from './repositories/mikro-orm-ledger.repository';
+import { MikroOrmOutboxRepository } from './repositories/mikro-orm-outbox.repository';
 import { MikroOrmWagerTransactionRepository } from './repositories/mikro-orm-wager-transaction.repository';
 import { MikroOrmWalletRepository } from './repositories/mikro-orm-wallet.repository';
 
@@ -51,5 +52,6 @@ function scopeFor(em: SqlEntityManager): TransactionScope {
     wallets: new MikroOrmWalletRepository(em),
     transactions: new MikroOrmWagerTransactionRepository(em),
     ledger: new MikroOrmLedgerRepository(em),
+    outbox: new MikroOrmOutboxRepository(em),
   };
 }

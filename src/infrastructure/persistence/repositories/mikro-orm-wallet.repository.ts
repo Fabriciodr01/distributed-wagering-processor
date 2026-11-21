@@ -1,4 +1,4 @@
-import type { SqlEntityManager } from '@mikro-orm/postgresql';
+import { LockMode, type SqlEntityManager } from '@mikro-orm/postgresql';
 import { WalletAlreadyExistsError } from '../../../application/errors';
 import type { WalletRepository } from '../../../application/ports/repositories.port';
 import type { Wallet } from '../../../domain/wallet';
@@ -21,7 +21,21 @@ export class MikroOrmWalletRepository implements WalletRepository {
   }
 
   async findById(walletId: string): Promise<Wallet | null> {
-    const row = await this.em.findOne(WalletRow, { id: walletId });
+    const row = await this.em.findOne(WalletRow, { id: walletId }, { refresh: true });
     return row ? WalletMapper.toDomain(row) : null;
+  }
+
+  async findByIdForUpdate(walletId: string): Promise<Wallet | null> {
+    const row = await this.em.findOne(
+      WalletRow,
+      { id: walletId },
+      { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true },
+    );
+    return row ? WalletMapper.toDomain(row) : null;
+  }
+
+  async update(wallet: Wallet): Promise<void> {
+    const { balance, version, updatedAt } = WalletMapper.fromDomain(wallet);
+    await this.em.nativeUpdate(WalletRow, { id: wallet.id }, { balance, version, updatedAt });
   }
 }
