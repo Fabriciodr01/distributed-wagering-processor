@@ -1,0 +1,82 @@
+# Ambiente de desenvolvimento: Postgres, MiniStack (SQS) e três instâncias da aplicação.
+#   bun run infra:up              -> só postgres + ministack (para rodar a app localmente)
+#   docker compose up -d --build  -> tudo, incluindo filas, migrations e app1..app3
+
+x-app: &app
+  build: .
+  image: distributed-wagering-processor:local
+  environment: &app-env
+    NODE_ENV: production
+    PORT: "3000"
+    DATABASE_URL: postgres://wager:wager@postgres:5432/wager
+    SQS_ENDPOINT: http://ministack:4566
+    AWS_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: test
+    AWS_SECRET_ACCESS_KEY: test
+  depends_on: &app-deps
+    postgres:
+      condition: service_healthy
+    ministack:
+      condition: service_healthy
+    init-queues:
+      condition: service_completed_successfully
+    migrate:
+      condition: service_completed_successfully
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wager
+      POSTGRES_PASSWORD: wager
+      POSTGRES_DB: wager
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wager -d wager"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  ministack:
+    image: ministackorg/ministack:1.5.43
+    ports:
+      - "4566:4566"
+    # A imagem já traz um healthcheck próprio.
+
+  init-queues:
+    <<: *app
+    command: ["bun", "scripts/infra-init-queues.ts"]
+    depends_on:
+      ministack:
+        condition: service_healthy
+    restart: "no"
+
+  migrate:
+    <<: *app
+    command: ["bun", "scripts/migrate.ts", "up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app1:
+    <<: *app
+    ports:
+      - "3001:3000"
+
+  app2:
+    <<: *app
+    ports:
+      - "3002:3000"
+
+  app3:
+    <<: *app
+    ports:
+      - "3003:3000"
+
+volumes:
+  postgres-data:

@@ -1,0 +1,48 @@
+# Infraestrutura dos testes: portas próprias para não colidir com o ambiente de dev.
+# Cada suíte cria o próprio banco e as próprias filas (sufixo único), então não há estado compartilhado.
+name: wagering-test
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wager
+      POSTGRES_PASSWORD: wager
+      POSTGRES_DB: wager
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off", "-c", "max_connections=300"]
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wager -d wager"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  ministack-test:
+    image: ministackorg/ministack:1.5.43
+    ports:
+      - "4567:4566"
+
+  # Roda a suíte dentro de um container Linux (bun run test:docker). Útil em hosts Windows,
+  # onde SIGTERM não é entregue ao processo e os testes de shutdown são pulados.
+  tests:
+    image: oven/bun:1.4.4
+    profiles: ["runner"]
+    working_dir: /app
+    volumes:
+      - .:/app
+      - test-node-modules:/app/node_modules
+    environment:
+      TEST_DATABASE_URL: postgres://wager:wager@postgres-test:5432/wager
+      TEST_SQS_ENDPOINT: http://ministack-test:4566
+    command: ["sh", "-c", "bun install --frozen-lockfile && bun run check"]
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      ministack-test:
+        condition: service_healthy
+
+volumes:
+  test-node-modules:
