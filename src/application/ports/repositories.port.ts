@@ -1,3 +1,4 @@
+import type { InboxMessage } from '../../domain/inbox-message';
 import type { OutboxMessage } from '../../domain/outbox-message';
 import type { WagerTransaction } from '../../domain/wager-transaction';
 import type { Wallet } from '../../domain/wallet';
@@ -72,6 +73,16 @@ export interface PositionedLedgerEntry {
 export interface LedgerRepository {
   append(entry: WalletLedgerEntry): Promise<void>;
   page(walletId: string, currency: string, query: LedgerPageQuery): Promise<LedgerPage>;
+}
+
+export interface InboxRepository {
+  /**
+   * Reserva (consumerName, messageId) na transação corrente. false = a mensagem já foi
+   * vista; se outra transação estiver gravando a mesma chave, espera ela terminar.
+   */
+  insertIfAbsent(message: InboxMessage): Promise<boolean>;
+  find(consumerName: string, messageId: string): Promise<InboxMessage | null>;
+  markProcessed(message: InboxMessage): Promise<void>;
 }
 
 export interface OutboxRepository {

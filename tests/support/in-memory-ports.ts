@@ -2,6 +2,7 @@ import { WalletAlreadyExistsError } from '../../src/application/errors';
 import type { Clock } from '../../src/application/ports/clock.port';
 import type { IdGenerator } from '../../src/application/ports/id-generator.port';
 import type {
+  InboxRepository,
   LedgerPage,
   LedgerPageQuery,
   LedgerRepository,
@@ -12,6 +13,7 @@ import type {
   WalletRepository,
 } from '../../src/application/ports/repositories.port';
 import type { TransactionScope, UnitOfWork, UnitOfWorkOptions } from '../../src/application/ports/unit-of-work.port';
+import { InboxMessage, type InboxMessageState } from '../../src/domain/inbox-message';
 import type { OutboxMessage } from '../../src/domain/outbox-message';
 import {
   WagerTransaction,
@@ -35,6 +37,7 @@ export interface StoredTransaction {
 }
 
 interface Data {
+  inbox: Map<string, InboxMessageState>;
   wallets: Map<string, WalletState>;
   transactions: Map<string, StoredTransaction>;
   ledger: WalletLedgerEntry[];
@@ -74,7 +77,7 @@ const transactionState = (tx: WagerTransaction): WagerTransactionState => ({
 
 /** Banco em memória com UnitOfWork transacional: uma falha desfaz tudo o que a execução gravou. */
 export class InMemoryDatabase implements UnitOfWork {
-  private data: Data = { wallets: new Map(), transactions: new Map(), ledger: [], outbox: [] };
+  private data: Data = { inbox: new Map(), wallets: new Map(), transactions: new Map(), ledger: [], outbox: [] };
   /** Falhas a lançar no início das próximas execuções (ex.: simular deadlock). */
   readonly failures: Error[] = [];
   runs = 0;
@@ -84,6 +87,7 @@ export class InMemoryDatabase implements UnitOfWork {
     const failure = this.failures.shift();
     if (failure) throw failure;
     const snapshot: Data = {
+      inbox: new Map(this.data.inbox),
       wallets: new Map(this.data.wallets),
       transactions: new Map(this.data.transactions),
       ledger: [...this.data.ledger],
@@ -121,6 +125,10 @@ export class InMemoryDatabase implements UnitOfWork {
 
   get outbox(): readonly OutboxMessage[] {
     return this.data.outbox;
+  }
+
+  get inbox(): InboxMessage[] {
+    return [...this.data.inbox.values()].map((state) => InboxMessage.rehydrate(state));
   }
 
   eventTypesFor(transactionId: string): string[] {
@@ -241,7 +249,31 @@ export class InMemoryDatabase implements UnitOfWork {
       },
     };
 
-    return { wallets, transactions, ledger, outbox };
+    const inboxKey = (consumerName: string, messageId: string) => `${consumerName}\u0000${messageId}`;
+    const inboxState = (message: InboxMessage): InboxMessageState => ({
+      messageId: message.messageId,
+      consumerName: message.consumerName,
+      payloadHash: message.payloadHash,
+      receivedAt: message.receivedAt,
+      processedAt: message.processedAt,
+    });
+    const inbox: InboxRepository = {
+      async insertIfAbsent(message) {
+        const key = inboxKey(message.consumerName, message.messageId);
+        if (data.inbox.has(key)) return false;
+        data.inbox.set(key, inboxState(message));
+        return true;
+      },
+      async find(consumerName, messageId) {
+        const state = data.inbox.get(inboxKey(consumerName, messageId));
+        return state ? InboxMessage.rehydrate(state) : null;
+      },
+      async markProcessed(message) {
+        data.inbox.set(inboxKey(message.consumerName, message.messageId), inboxState(message));
+      },
+    };
+
+    return { wallets, transactions, ledger, outbox, inbox };
   }
 }
 

@@ -1,4 +1,11 @@
-import { DeleteMessageCommand, type Message, ReceiveMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
+import {
+  DeleteMessageCommand,
+  GetQueueAttributesCommand,
+  type Message,
+  ReceiveMessageCommand,
+  SendMessageCommand,
+  type SQSClient,
+} from '@aws-sdk/client-sqs';
 
 /**
  * Lê (e apaga) mensagens até juntar `expected` ou o prazo acabar. Apagar é necessário
@@ -39,4 +46,35 @@ export async function expectQueueEmpty(client: SQSClient, queueUrl: string): Pro
 
 export function bodyOf<T = any>(message: Message): T {
   return JSON.parse(message.Body ?? 'null') as T;
+}
+
+export interface SendOptions {
+  readonly groupId: string;
+  readonly deduplicationId: string;
+}
+
+/** Publica na fila de transações como um provedor faria (corpo cru, para testar mensagens inválidas). */
+export async function sendRaw(client: SQSClient, queueUrl: string, body: string, options: SendOptions): Promise<void> {
+  await client.send(
+    new SendMessageCommand({
+      QueueUrl: queueUrl,
+      MessageBody: body,
+      MessageGroupId: options.groupId,
+      MessageDeduplicationId: options.deduplicationId,
+    }),
+  );
+}
+
+/** Mensagens visíveis + em processamento (recebidas e ainda não apagadas). */
+export async function queueDepth(client: SQSClient, queueUrl: string): Promise<{ visible: number; inFlight: number }> {
+  const { Attributes = {} } = await client.send(
+    new GetQueueAttributesCommand({
+      QueueUrl: queueUrl,
+      AttributeNames: ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible'],
+    }),
+  );
+  return {
+    visible: Number(Attributes.ApproximateNumberOfMessages ?? 0),
+    inFlight: Number(Attributes.ApproximateNumberOfMessagesNotVisible ?? 0),
+  };
 }

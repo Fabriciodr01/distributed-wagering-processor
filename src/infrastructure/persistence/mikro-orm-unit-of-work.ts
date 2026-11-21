@@ -8,6 +8,7 @@ import type {
 import type { AppConfig } from '../../config/app-config';
 import { APP_CONFIG } from '../../config/config.module';
 import { withDatabaseErrors } from './database-errors';
+import { MikroOrmInboxRepository } from './repositories/mikro-orm-inbox.repository';
 import { MikroOrmLedgerRepository } from './repositories/mikro-orm-ledger.repository';
 import { MikroOrmOutboxRepository } from './repositories/mikro-orm-outbox.repository';
 import { MikroOrmWagerTransactionRepository } from './repositories/mikro-orm-wager-transaction.repository';
@@ -48,5 +49,6 @@ function scopeFor(em: SqlEntityManager): TransactionScope {
     transactions: new MikroOrmWagerTransactionRepository(em),
     ledger: new MikroOrmLedgerRepository(em),
     outbox: new MikroOrmOutboxRepository(em),
+    inbox: new MikroOrmInboxRepository(em),
   };
 }

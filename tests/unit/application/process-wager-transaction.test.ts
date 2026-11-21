@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import {
   ExternalTransactionConflictError,
   IdempotencyKeyConflictError,
+  InboxMessageConflictError,
   InvalidWagerRequestError,
   TransientFailureError,
   WalletNotFoundError,
@@ -316,5 +317,80 @@ describe('falhas de infraestrutura', () => {
     expect(balance()).toBe('100.00');
     expect(db.transactions).toHaveLength(0);
     expect(db.outbox).toHaveLength(0);
+  });
+});
+
+describe('entrada pela fila (inbox)', () => {
+  const inbox = (messageId = 'msg-1') => ({ consumerName: 'consumer-a', messageId });
+
+  test('primeira entrega aplica e grava o inbox processado; redelivery é duplicata sem efeito', async () => {
+    const bet = command({ money: brl('10.00') });
+    const first = await useCase.executeFromQueue(bet, inbox());
+    expect(first.kind).toBe('applied');
+    expect(db.inbox).toHaveLength(1);
+    expect(db.inbox[0]!.isProcessed()).toBe(true);
+
+    expect(await useCase.executeFromQueue(bet, inbox())).toEqual({ kind: 'duplicate' });
+    expect(balance()).toBe('90.00');
+    expect(db.transactions).toHaveLength(1);
+  });
+
+  test('o mesmo pedido em outra mensagem (outro messageId) é replay da transação, não novo débito', async () => {
+    const bet = command({ money: brl('10.00') });
+    await useCase.executeFromQueue(bet, inbox('msg-1'));
+    const second = await useCase.executeFromQueue(bet, inbox('msg-2'));
+    expect(second.kind === 'applied' && second.result.idempotentReplay).toBe(true);
+    expect(balance()).toBe('90.00');
+  });
+
+  test('mesmo messageId com conteúdo diferente → InboxMessageConflictError', async () => {
+    await useCase.executeFromQueue(command({ money: brl('10.00') }), inbox());
+    await expect(useCase.executeFromQueue(command({ money: brl('11.00') }), inbox())).rejects.toBeInstanceOf(
+      InboxMessageConflictError,
+    );
+  });
+
+  test('a chave de idempotência faz parte do conteúdo da mensagem', async () => {
+    const bet = command();
+    await useCase.executeFromQueue(bet, inbox());
+    await expect(useCase.executeFromQueue({ ...bet, idempotencyKey: 'outra' }, inbox())).rejects.toBeInstanceOf(
+      InboxMessageConflictError,
+    );
+  });
+
+  test('falha no processamento desfaz o inbox: a redelivery será processada de novo', async () => {
+    await expect(useCase.executeFromQueue(command({ walletId: 'nao-existe' }), inbox())).rejects.toBeInstanceOf(
+      WalletNotFoundError,
+    );
+    expect(db.inbox).toHaveLength(0);
+  });
+});
+
+describe('registro de pedido que nunca pôde ser processado', () => {
+  test('grava a transação já FAILED, sem lançamento nem evento; não grava duas vezes', async () => {
+    const bet = command({ money: brl('10.00') });
+    expect(await useCase.recordFailedSubmission(bet, FailureCode.ProcessingRetriesExhausted)).toBe('recorded');
+
+    const [stored] = db.transactions;
+    expect(stored!.state).toMatchObject({ status: Status.Failed, failureCode: FailureCode.ProcessingRetriesExhausted });
+    expect(balance()).toBe('100.00');
+    expect(db.ledger).toHaveLength(1);
+    expect(db.outbox).toHaveLength(0);
+    expect(await useCase.recordFailedSubmission(bet, FailureCode.ProcessingRetriesExhausted)).toBe('skipped');
+  });
+
+  test('sem wallet não há onde registrar: skipped', async () => {
+    expect(
+      await useCase.recordFailedSubmission(command({ walletId: 'nao-existe' }), FailureCode.ProcessingRetriesExhausted),
+    ).toBe('skipped');
+    expect(db.transactions).toHaveLength(0);
+  });
+
+  test('o replay de um pedido FAILED devolve FAILED (operação de suporte, não reprocesso silencioso)', async () => {
+    const bet = command({ money: brl('10.00') });
+    await useCase.recordFailedSubmission(bet, FailureCode.ProcessingRetriesExhausted);
+    const replay = await useCase.execute(bet);
+    expect(replay).toMatchObject({ status: Status.Failed, idempotentReplay: true });
+    expect(balance()).toBe('100.00');
   });
 });

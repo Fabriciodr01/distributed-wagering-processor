@@ -37,7 +37,7 @@ const envSchema = z
     CONSUMER_MAX_ATTEMPTS: positiveInt.default(5),
     CONSUMER_VISIBILITY_TIMEOUT_S: positiveInt.max(43200).default(30),
     CONSUMER_WAIT_TIME_S: nonNegativeInt.max(20).default(10),
-    CONSUMER_RETRY_BASE_S: positiveInt.default(2),
+    CONSUMER_RETRY_BASE_S: nonNegativeInt.default(2),
     SHUTDOWN_TIMEOUT_MS: positiveInt.default(25000),
 
     OUTBOX_POLL_INTERVAL_MS: positiveInt.default(1000),

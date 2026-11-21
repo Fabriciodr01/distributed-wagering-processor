@@ -76,6 +76,13 @@ export class ExternalTransactionConflictError extends ApplicationError {
   }
 }
 
+/** Mesmo messageId com conteúdo diferente: não é redelivery, é mensagem conflitante. */
+export class InboxMessageConflictError extends ApplicationError {
+  constructor(readonly messageId: string) {
+    super(`messageId ${messageId} já foi recebido com outro conteúdo`);
+  }
+}
+
 /** A identidade autenticada não pode agir em nome do provider do payload. */
 export class ProviderNotAllowedError extends ApplicationError {
   constructor(readonly providerId: string) {

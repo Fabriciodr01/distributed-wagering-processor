@@ -36,3 +36,17 @@ export function wagerPayloadHash(command: ProcessWagerTransactionCommand): strin
     referenceExternalTransactionId: command.referenceExternalTransactionId,
   });
 }
+
+/** De onde veio o pedido quando ele chega pela fila: base da deduplicação do inbox. */
+export interface InboxContext {
+  readonly consumerName: string;
+  readonly messageId: string;
+}
+
+/**
+ * Hash do conteúdo da mensagem para o inbox: o payload de negócio mais a chave de
+ * idempotência. Mesmo messageId com qualquer um deles diferente é outra mensagem.
+ */
+export function inboxPayloadHash(command: ProcessWagerTransactionCommand): string {
+  return payloadHash({ payloadHash: wagerPayloadHash(command), idempotencyKey: command.idempotencyKey });
+}

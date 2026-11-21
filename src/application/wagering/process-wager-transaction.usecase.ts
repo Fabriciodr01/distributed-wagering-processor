@@ -7,6 +7,7 @@ import {
 } from '../../domain/events';
 import type { EventContext, IntegrationEvent } from '../../domain/events/integration-event';
 import { FailureCode } from '../../domain/failure-code';
+import { InboxMessage } from '../../domain/inbox-message';
 import { OutboxMessage } from '../../domain/outbox-message';
 import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus } from '../../domain/wager-transaction';
 import type { Wallet } from '../../domain/wallet';
@@ -14,6 +15,7 @@ import { LedgerDirection, type WalletLedgerEntry } from '../../domain/wallet-led
 import {
   ExternalTransactionConflictError,
   IdempotencyKeyConflictError,
+  InboxMessageConflictError,
   InvalidWagerRequestError,
   TransientFailureError,
   WalletNotFoundError,
@@ -22,12 +24,22 @@ import type { Clock } from '../ports/clock.port';
 import type { IdGenerator } from '../ports/id-generator.port';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.port';
 import { type ReferenceRetryPolicy, referenceRetryDelayMs } from './reference-retry-policy';
-import { type ProcessWagerTransactionCommand, wagerPayloadHash } from './wager-transaction-command';
+import {
+  type InboxContext,
+  inboxPayloadHash,
+  type ProcessWagerTransactionCommand,
+  wagerPayloadHash,
+} from './wager-transaction-command';
 import { resultOf, type WagerTransactionResult } from './wager-transaction-result';
 
 export interface ProcessWagerTransactionSettings {
   readonly referenceRetry: ReferenceRetryPolicy;
 }
+
+/** Resultado de uma mensagem da fila: aplicada agora, ou já vista antes (redelivery). */
+export type QueueProcessingResult =
+  | { readonly kind: 'applied'; readonly result: WagerTransactionResult }
+  | { readonly kind: 'duplicate' };
 
 /** O que aconteceu com uma transação PENDING_REFERENCE reavaliada pelo worker. */
 export type ReprocessOutcome = 'processed' | 'rejected' | 'still_pending' | 'expired' | 'skipped';
@@ -68,6 +80,47 @@ export class ProcessWagerTransactionUseCase {
       // Recriada a cada tentativa: uma tentativa abortada pode ter deixado o objeto já decidido.
       const transaction = this.buildTransaction(command);
       return this.unitOfWork.run((scope) => this.submit(scope, command, transaction));
+    });
+  }
+
+  /**
+   * Mesmo fluxo da API, com o inbox reservado no início da mesma transação SQL: uma
+   * redelivery do mesmo messageId não tem efeito, e o registro só existe se tudo commitar.
+   */
+  executeFromQueue(command: ProcessWagerTransactionCommand, inbox: InboxContext): Promise<QueueProcessingResult> {
+    return this.withDeadlockRetry(() => {
+      const transaction = this.buildTransaction(command);
+      return this.unitOfWork.run(async (scope) => {
+        const message = InboxMessage.receive({
+          consumerName: inbox.consumerName,
+          messageId: inbox.messageId,
+          payloadHash: inboxPayloadHash(command),
+          receivedAt: this.clock.now(),
+        });
+        if (!(await scope.inbox.insertIfAbsent(message))) {
+          const existing = await scope.inbox.find(inbox.consumerName, inbox.messageId);
+          if (!existing?.matchesPayload(message.payloadHash)) throw new InboxMessageConflictError(inbox.messageId);
+          return { kind: 'duplicate' } as const;
+        }
+        const result = await this.submit(scope, command, transaction);
+        message.markProcessed(this.clock.now());
+        await scope.inbox.markProcessed(message);
+        return { kind: 'applied', result } as const;
+      });
+    });
+  }
+
+  /**
+   * Deixa auditável um pedido que nunca pôde ser processado (ex.: retries da fila esgotados):
+   * grava a transação já como FAILED, sem mexer no saldo. Melhor esforço: só quando a wallet
+   * existe e a transação ainda não foi gravada por outra tentativa.
+   */
+  recordFailedSubmission(command: ProcessWagerTransactionCommand, code: FailureCode): Promise<'recorded' | 'skipped'> {
+    const transaction = this.buildTransaction(command);
+    transaction.fail({ code, at: this.clock.now() });
+    return this.unitOfWork.run(async (scope) => {
+      if (!(await scope.wallets.findById(command.walletId))) return 'skipped';
+      return (await scope.transactions.insertIfAbsent(transaction)) ? 'recorded' : 'skipped';
     });
   }
 

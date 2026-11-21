@@ -1,4 +1,5 @@
 import type {
+  InboxRepository,
   LedgerRepository,
   OutboxRepository,
   WagerTransactionRepository,
@@ -13,6 +14,7 @@ export interface TransactionScope {
   readonly transactions: WagerTransactionRepository;
   readonly ledger: LedgerRepository;
   readonly outbox: OutboxRepository;
+  readonly inbox: InboxRepository;
 }
 
 export interface UnitOfWorkOptions {
