@@ -1,3 +1,4 @@
+import type { ReconciliationReport } from '../../../application/wallets/reconcile-wallet.usecase';
 import type { MoneyProps } from '../../../domain/money';
 import type { Wallet } from '../../../domain/wallet';
 import type { LedgerDirection, WalletLedgerEntry } from '../../../domain/wallet-ledger-entry';
@@ -17,6 +18,26 @@ export interface LedgerEntryResponse {
   readonly balanceBefore: MoneyProps;
   readonly balanceAfter: MoneyProps;
   readonly createdAt: string;
+}
+
+export interface ReconciliationResponse {
+  readonly walletId: string;
+  readonly storedBalance: MoneyProps;
+  readonly calculatedBalance: MoneyProps;
+  readonly difference: MoneyProps;
+  readonly consistent: boolean;
+  readonly checkedEntries: number;
+}
+
+export function presentReconciliation(report: ReconciliationReport): ReconciliationResponse {
+  return {
+    walletId: report.walletId,
+    storedBalance: report.storedBalance.toJSON(),
+    calculatedBalance: report.calculatedBalance.toJSON(),
+    difference: report.difference.toJSON(),
+    consistent: report.consistent,
+    checkedEntries: report.checkedEntries,
+  };
 }
 
 export function presentWallet(wallet: Wallet): WalletResponse {

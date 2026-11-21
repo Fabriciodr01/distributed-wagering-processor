@@ -2,13 +2,16 @@ import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGua
 import { CreateWalletUseCase } from '../../../application/wallets/create-wallet.usecase';
 import { GetWalletUseCase } from '../../../application/wallets/get-wallet.usecase';
 import { ListWalletLedgerUseCase } from '../../../application/wallets/list-wallet-ledger.usecase';
+import { ReconcileWalletUseCase } from '../../../application/wallets/reconcile-wallet.usecase';
 import { ProviderAuthGuard } from '../auth/provider-auth.guard';
 import { walletIdParamSchema } from '../../contracts/common.schemas';
 import { ZodValidationPipe } from '../validation/zod-validation.pipe';
 import {
   type LedgerEntryResponse,
   presentLedgerEntry,
+  presentReconciliation,
   presentWallet,
+  type ReconciliationResponse,
   type WalletResponse,
 } from './wallet.presenter';
 import {
@@ -25,6 +28,7 @@ export class WalletsController {
     private readonly createWallet: CreateWalletUseCase,
     private readonly getWallet: GetWalletUseCase,
     private readonly listLedger: ListWalletLedgerUseCase,
+    private readonly reconcileWallet: ReconcileWalletUseCase,
   ) {}
 
   @Post()
@@ -40,6 +44,15 @@ export class WalletsController {
     @Param('walletId', new ZodValidationPipe(walletIdParamSchema)) walletId: string,
   ): Promise<WalletResponse> {
     return presentWallet(await this.getWallet.execute(walletId));
+  }
+
+  /** Sempre 200: a divergência vem sinalizada no corpo (consistent: false), nunca corrigida. */
+  @Post(':walletId/reconciliation')
+  @HttpCode(HttpStatus.OK)
+  async reconcile(
+    @Param('walletId', new ZodValidationPipe(walletIdParamSchema)) walletId: string,
+  ): Promise<ReconciliationResponse> {
+    return presentReconciliation(await this.reconcileWallet.execute(walletId));
   }
 
   @Get(':walletId/ledger')

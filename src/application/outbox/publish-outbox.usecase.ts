@@ -1,5 +1,6 @@
 import type { OutboxRetryPolicy } from '../../domain/outbox-message';
 import type { EventPublisher, OutboxStore } from '../ports/outbox.port';
+import type { Telemetry } from '../ports/telemetry.port';
 
 export interface PublishOutboxResult {
   readonly claimed: number;
@@ -17,6 +18,7 @@ export class PublishOutboxUseCase {
     private readonly store: OutboxStore,
     private readonly publisher: EventPublisher,
     private readonly retryPolicy: OutboxRetryPolicy,
+    private readonly telemetry: Telemetry,
   ) {}
 
   async publishDue(limit: number, leaseMs: number): Promise<PublishOutboxResult> {
@@ -28,6 +30,7 @@ export class PublishOutboxUseCase {
       } catch (error) {
         message.scheduleRetry(now, this.retryPolicy);
         await this.store.scheduleRetry(message, error instanceof Error ? error.message : String(error));
+        this.telemetry.retryScheduled('outbox');
         continue;
       }
       message.markPublished(now);

@@ -1,4 +1,4 @@
-import type { INestApplication } from '@nestjs/common';
+import { type INestApplication, Logger } from '@nestjs/common';
 import { createApp } from './app.factory';
 import { type AppConfig, InvalidConfigError, loadConfig } from './config/app-config';
 
@@ -11,20 +11,21 @@ const FORCED_EXIT_MARGIN_MS = 5000;
  * roda os mesmos hooks de ciclo de vida e o exit code diz se a drenagem terminou bem.
  */
 function handleShutdownSignals(app: INestApplication, config: AppConfig): void {
+  const logger = new Logger('Shutdown');
   let shuttingDown = false;
   const shutdown = async (signal: NodeJS.Signals) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`${signal} recebido, encerrando`);
+    logger.log(`${signal} recebido, encerrando`);
     setTimeout(() => {
-      console.error('Encerramento excedeu o tempo limite; saindo à força');
+      logger.error('Encerramento excedeu o tempo limite; saindo à força');
       process.exit(1);
     }, config.consumer.shutdownTimeoutMs + FORCED_EXIT_MARGIN_MS).unref();
     try {
       await app.close();
       process.exit(0);
     } catch (error) {
-      console.error('Falha ao encerrar a aplicação', error);
+      logger.error(`Falha ao encerrar a aplicação: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);
     }
   };

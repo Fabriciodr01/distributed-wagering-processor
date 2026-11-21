@@ -21,12 +21,14 @@ import {
   TransientFailureError,
   WalletNotFoundError,
 } from '../../application/errors';
+import { TELEMETRY, type Telemetry } from '../../application/ports/telemetry.port';
 import { ProcessWagerTransactionUseCase } from '../../application/wagering/process-wager-transaction.usecase';
 import type { ProcessWagerTransactionCommand } from '../../application/wagering/wager-transaction-command';
 import type { AppConfig } from '../../config/app-config';
 import { APP_CONFIG } from '../../config/config.module';
 import { FailureCode } from '../../domain/failure-code';
 import { type WagerTransactionMessage, wagerTransactionMessageSchema } from '../contracts/wager-transaction.contract';
+import { addLogContext, runWithLogContext } from '../observability/log-context';
 import { resolveQueueUrl } from './queue-setup';
 import { SQS_CLIENT } from './sqs.tokens';
 
@@ -64,6 +66,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
     @Inject(SQS_CLIENT) private readonly sqs: SQSClient,
     private readonly useCase: ProcessWagerTransactionUseCase,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    @Inject(TELEMETRY) private readonly telemetry: Telemetry,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -104,7 +107,10 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
         await this.release(messages.slice(index));
         break;
       }
-      await this.handle(message);
+      // O messageId é o correlationId de tudo o que a mensagem gerar.
+      await runWithLogContext({ messageId: message.MessageId, correlationId: message.MessageId }, () =>
+        this.handle(message),
+      );
     }
     return messages.length;
   }
@@ -128,11 +134,26 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
     }
 
     const command = toCommand(parsed.message);
+    addLogContext({
+      messageId: parsed.message.messageId,
+      correlationId: parsed.message.messageId,
+      walletId: command.walletId,
+      providerId: command.providerId,
+    });
     try {
-      await this.useCase.executeFromQueue(command, {
+      const outcome = await this.useCase.executeFromQueue(command, {
         consumerName: this.config.consumer.name,
         messageId: parsed.message.messageId,
       });
+      if (outcome.kind === 'applied') {
+        addLogContext({ transactionId: outcome.result.transactionId });
+        this.logger.log(
+          { kind: command.kind, status: outcome.result.status, failureCode: outcome.result.failureCode },
+          'Mensagem processada',
+        );
+      } else {
+        this.logger.log('Mensagem já processada antes (redelivery); só confirmada');
+      }
     } catch (error) {
       await this.handleFailure(message, command, error);
       return;
@@ -153,7 +174,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
 
     const receiveCount = Number(message.Attributes?.ApproximateReceiveCount ?? '1');
     if (receiveCount < this.config.consumer.maxAttempts) {
-      this.logger.warn(`Mensagem ${message.MessageId} volta para a fila (tentativa ${receiveCount}): ${describe(error)}`);
+      this.logger.warn({ receiveCount, error: describe(error) }, 'Mensagem volta para a fila');
       await this.retryLater(message, receiveCount);
       return;
     }
@@ -172,6 +193,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
   private async retryLater(message: Message, receiveCount: number): Promise<void> {
     const delay = Math.min(this.config.consumer.retryBaseS * 2 ** (receiveCount - 1), MAX_RETRY_DELAY_S);
     await this.changeVisibility(message, delay);
+    this.telemetry.retryScheduled('consumer');
   }
 
   private async release(messages: readonly Message[]): Promise<void> {
@@ -201,7 +223,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
    */
   private async deadLetter(message: Message, reason: DeadLetterReason, detail: string): Promise<void> {
     const { dlq } = await this.urls();
-    this.logger.error(`Mensagem ${message.MessageId} enviada à DLQ (${reason}): ${detail}`);
+    this.logger.error({ reason, detail }, 'Mensagem enviada à DLQ');
     await this.sqs.send(
       new SendMessageCommand({
         QueueUrl: dlq,
@@ -215,6 +237,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
       }),
     );
     await this.ack(message);
+    this.telemetry.deadLettered(reason);
   }
 
   private async urls(): Promise<{ transactions: string; dlq: string }> {

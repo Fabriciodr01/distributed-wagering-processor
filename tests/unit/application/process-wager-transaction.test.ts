@@ -14,7 +14,7 @@ import { Money } from '../../../src/domain/money';
 import { WagerTransactionKind as Kind, WagerTransactionStatus as Status } from '../../../src/domain/wager-transaction';
 import { Wallet } from '../../../src/domain/wallet';
 import { LedgerDirection } from '../../../src/domain/wallet-ledger-entry';
-import { FixedClock, InMemoryDatabase, SequentialIds } from '../../support/in-memory-ports';
+import { FixedClock, InMemoryDatabase, RecordingTelemetry, SequentialIds } from '../../support/in-memory-ports';
 
 const brl = (amount: string) => Money.from({ amount, currency: 'BRL' });
 const PLAYER = 'player-1';
@@ -22,6 +22,7 @@ const WALLET = 'wallet-1';
 const POLICY = { baseDelayMs: 1000, maxDelayMs: 4000, maxAttempts: 4 };
 
 let db: InMemoryDatabase;
+let telemetry: RecordingTelemetry;
 let useCase: ProcessWagerTransactionUseCase;
 let sequence: number;
 
@@ -61,7 +62,14 @@ const balance = () => db.wallet(WALLET).balance.toJSON().amount;
 
 beforeEach(() => {
   db = new InMemoryDatabase();
-  useCase = new ProcessWagerTransactionUseCase(db, new FixedClock(), new SequentialIds(), { referenceRetry: POLICY });
+  telemetry = new RecordingTelemetry();
+  useCase = new ProcessWagerTransactionUseCase(
+    db,
+    new FixedClock(),
+    new SequentialIds(),
+    { referenceRetry: POLICY },
+    telemetry,
+  );
   sequence = 0;
   openWallet('100.00');
 });
@@ -312,6 +320,7 @@ describe('falhas de infraestrutura', () => {
       new FixedClock(),
       new SequentialIds(),
       { referenceRetry: POLICY },
+      telemetry,
     );
     await expect(failing.execute(command({ money: brl('10.00') }))).rejects.toThrow('falha antes do commit');
     expect(balance()).toBe('100.00');
@@ -392,5 +401,50 @@ describe('registro de pedido que nunca pôde ser processado', () => {
     const replay = await useCase.execute(bet);
     expect(replay).toMatchObject({ status: Status.Failed, idempotentReplay: true });
     expect(balance()).toBe('100.00');
+  });
+});
+
+describe('telemetria', () => {
+  test('sinais só depois do commit: decisão, duplicata, retry de pendência e conflito de lock', async () => {
+    const bet = command({ money: brl('10.00') });
+    await useCase.execute(bet);
+    await useCase.execute(bet);
+    await useCase.execute(command({ money: brl('999.00') }));
+    const refund = await useCase.execute(command({ kind: Kind.Refund, referenceExternalTransactionId: 'nunca' }));
+    await useCase.reprocessPendingReference(refund.transactionId);
+    db.failures.push(new TransientFailureError('lock_timeout'));
+    await useCase.execute(command()).catch(() => {});
+
+    expect(telemetry.signals()).toEqual([
+      ['transactionDecided', Status.Processed, Kind.Bet],
+      ['duplicateDetected', 'http'],
+      ['transactionDecided', Status.Rejected, Kind.Bet],
+      ['transactionDecided', Status.PendingReference, Kind.Refund],
+      ['retryScheduled', 'pending_reference'],
+      ['lockConflict', 'lock_timeout'],
+    ]);
+    expect(telemetry.calls.filter(([name]) => name === 'processingDuration')).toHaveLength(4);
+  });
+
+  test('tentativa desfeita não emite decisão', async () => {
+    const failing = new ProcessWagerTransactionUseCase(
+      { run: (work, options) => db.run(async (scope) => { await work(scope); throw new Error('rollback'); }, options) },
+      new FixedClock(),
+      new SequentialIds(),
+      { referenceRetry: POLICY },
+      telemetry,
+    );
+    await failing.execute(command()).catch(() => {});
+    expect(telemetry.signals()).toEqual([]);
+  });
+
+  test('pela fila, redelivery conta como duplicata de origem sqs', async () => {
+    const bet = command();
+    await useCase.executeFromQueue(bet, { consumerName: 'c', messageId: 'm-1' });
+    await useCase.executeFromQueue(bet, { consumerName: 'c', messageId: 'm-1' });
+    expect(telemetry.signals()).toEqual([
+      ['transactionDecided', Status.Processed, Kind.Bet],
+      ['duplicateDetected', 'sqs'],
+    ]);
   });
 });

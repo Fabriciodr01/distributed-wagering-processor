@@ -1,6 +1,7 @@
 import { WalletAlreadyExistsError } from '../../src/application/errors';
 import type { Clock } from '../../src/application/ports/clock.port';
 import type { IdGenerator } from '../../src/application/ports/id-generator.port';
+import type { Telemetry } from '../../src/application/ports/telemetry.port';
 import type {
   InboxRepository,
   LedgerPage,
@@ -22,7 +23,8 @@ import {
   WagerTransactionStatus,
 } from '../../src/domain/wager-transaction';
 import { Wallet, type WalletState } from '../../src/domain/wallet';
-import type { WalletLedgerEntry } from '../../src/domain/wallet-ledger-entry';
+import { LedgerDirection, type WalletLedgerEntry } from '../../src/domain/wallet-ledger-entry';
+import { Money } from '../../src/domain/money';
 
 /**
  * Portas em memória para testes de UNIDADE do caso de uso: isolam a orquestração e a
@@ -234,6 +236,12 @@ export class InMemoryDatabase implements UnitOfWork {
       async append(entry) {
         data.ledger.push(entry);
       },
+      async summarize(walletId, currency) {
+        const entries = data.ledger.filter((entry) => entry.walletId === walletId);
+        const sum = (direction: LedgerDirection) =>
+          entries.filter((e) => e.direction === direction).reduce((total, e) => total.add(e.money), Money.zero(currency));
+        return { credits: sum(LedgerDirection.Credit), debits: sum(LedgerDirection.Debit), entries: entries.length };
+      },
       async page(walletId: string, _currency: string, query: LedgerPageQuery): Promise<LedgerPage> {
         const entries = data.ledger
           .map((entry, index) => ({ entry, position: BigInt(index + 1) }))
@@ -295,5 +303,37 @@ export class SequentialIds implements IdGenerator {
   next(): string {
     this.counter += 1;
     return `id-${String(this.counter).padStart(6, '0')}`;
+  }
+}
+
+/** Telemetria que só registra as chamadas, para os testes conferirem os sinais emitidos. */
+export class RecordingTelemetry implements Telemetry {
+  readonly calls: Array<[string, ...unknown[]]> = [];
+
+  transactionDecided(status: string, kind: string): void {
+    this.calls.push(['transactionDecided', status, kind]);
+  }
+  duplicateDetected(source: string): void {
+    this.calls.push(['duplicateDetected', source]);
+  }
+  retryScheduled(type: string): void {
+    this.calls.push(['retryScheduled', type]);
+  }
+  deadLettered(reason: string): void {
+    this.calls.push(['deadLettered', reason]);
+  }
+  lockConflict(type: string): void {
+    this.calls.push(['lockConflict', type]);
+  }
+  processingDuration(source: string): void {
+    this.calls.push(['processingDuration', source]);
+  }
+  walletDivergence(report: { walletId: string; checkedEntries: number }): void {
+    this.calls.push(['walletDivergence', report.walletId, report.checkedEntries]);
+  }
+
+  /** Chamadas sem as de duração (o valor varia a cada execução). */
+  signals(): Array<[string, ...unknown[]]> {
+    return this.calls.filter(([name]) => name !== 'processingDuration');
   }
 }

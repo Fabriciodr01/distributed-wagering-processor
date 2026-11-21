@@ -35,8 +35,6 @@ export type WagerTransactionPayload = z.output<typeof wagerTransactionPayloadSch
 
 export const idempotencyKeySchema = z.string().min(1).max(255);
 
-export const correlationIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/);
-
 export const WAGER_TRANSACTION_MESSAGE_TYPE = 'WagerTransactionRequested';
 
 /** Mensagem da fila `wager-transactions.fifo`: o mesmo contrato da API, mais a chave de idempotência. */

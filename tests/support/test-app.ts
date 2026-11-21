@@ -8,7 +8,10 @@ export interface TestApp {
   close(): Promise<void>;
 }
 
-/** Sobe a aplicação Nest real em porta efêmera, no mesmo processo do teste. */
+/**
+ * Sobe a aplicação Nest real em porta efêmera, no mesmo processo do teste. Para ler a
+ * saída do logger, use `spawnInstance` (processo próprio, como em produção).
+ */
 export async function startTestApp(config: AppConfig): Promise<TestApp> {
   const app = await createApp(config);
   await app.listen(0, '127.0.0.1');

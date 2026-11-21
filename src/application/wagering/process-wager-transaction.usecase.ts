@@ -22,6 +22,7 @@ import {
 } from '../errors';
 import type { Clock } from '../ports/clock.port';
 import type { IdGenerator } from '../ports/id-generator.port';
+import type { IngressSource, Telemetry } from '../ports/telemetry.port';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.port';
 import { type ReferenceRetryPolicy, referenceRetryDelayMs } from './reference-retry-policy';
 import {
@@ -73,22 +74,27 @@ export class ProcessWagerTransactionUseCase {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly settings: ProcessWagerTransactionSettings,
+    private readonly telemetry: Telemetry,
   ) {}
 
-  execute(command: ProcessWagerTransactionCommand): Promise<WagerTransactionResult> {
-    return this.withDeadlockRetry(() => {
+  async execute(command: ProcessWagerTransactionCommand): Promise<WagerTransactionResult> {
+    const startedAt = performance.now();
+    const result = await this.withDeadlockRetry(() => {
       // Recriada a cada tentativa: uma tentativa abortada pode ter deixado o objeto já decidido.
       const transaction = this.buildTransaction(command);
       return this.unitOfWork.run((scope) => this.submit(scope, command, transaction));
     });
+    this.observeSubmission('http', command.kind, result, startedAt);
+    return result;
   }
 
   /**
    * Mesmo fluxo da API, com o inbox reservado no início da mesma transação SQL: uma
    * redelivery do mesmo messageId não tem efeito, e o registro só existe se tudo commitar.
    */
-  executeFromQueue(command: ProcessWagerTransactionCommand, inbox: InboxContext): Promise<QueueProcessingResult> {
-    return this.withDeadlockRetry(() => {
+  async executeFromQueue(command: ProcessWagerTransactionCommand, inbox: InboxContext): Promise<QueueProcessingResult> {
+    const startedAt = performance.now();
+    const outcome = await this.withDeadlockRetry(() => {
       const transaction = this.buildTransaction(command);
       return this.unitOfWork.run(async (scope) => {
         const message = InboxMessage.receive({
@@ -108,6 +114,9 @@ export class ProcessWagerTransactionUseCase {
         return { kind: 'applied', result } as const;
       });
     });
+    if (outcome.kind === 'duplicate') this.telemetry.duplicateDetected('sqs');
+    else this.observeSubmission('sqs', command.kind, outcome.result, startedAt);
+    return outcome;
   }
 
   /**
@@ -115,40 +124,65 @@ export class ProcessWagerTransactionUseCase {
    * grava a transação já como FAILED, sem mexer no saldo. Melhor esforço: só quando a wallet
    * existe e a transação ainda não foi gravada por outra tentativa.
    */
-  recordFailedSubmission(command: ProcessWagerTransactionCommand, code: FailureCode): Promise<'recorded' | 'skipped'> {
+  async recordFailedSubmission(
+    command: ProcessWagerTransactionCommand,
+    code: FailureCode,
+  ): Promise<'recorded' | 'skipped'> {
     const transaction = this.buildTransaction(command);
     transaction.fail({ code, at: this.clock.now() });
-    return this.unitOfWork.run(async (scope) => {
+    const outcome = await this.unitOfWork.run(async (scope) => {
       if (!(await scope.wallets.findById(command.walletId))) return 'skipped';
       return (await scope.transactions.insertIfAbsent(transaction)) ? 'recorded' : 'skipped';
     });
+    if (outcome === 'recorded') this.telemetry.transactionDecided(WagerTransactionStatus.Failed, command.kind);
+    return outcome;
   }
 
   /** Reavalia uma transação que aguarda a referência; chamada pelo worker. */
-  reprocessPendingReference(transactionId: string): Promise<ReprocessOutcome> {
-    return this.withDeadlockRetry(() => this.unitOfWork.run((scope) => this.reprocess(scope, transactionId)));
+  async reprocessPendingReference(transactionId: string): Promise<ReprocessOutcome> {
+    const { outcome, transaction } = await this.withDeadlockRetry(() =>
+      this.unitOfWork.run((scope) => this.reprocess(scope, transactionId)),
+    );
+    if (outcome === 'still_pending') this.telemetry.retryScheduled('pending_reference');
+    else if (transaction && outcome !== 'skipped') this.telemetry.transactionDecided(transaction.status, transaction.kind);
+    return outcome;
   }
 
   /**
    * Registra uma reavaliação que falhou por erro inesperado: conta como tentativa e,
    * no limite, a transação vira FAILED (PERMANENT_PROCESSING_ERROR) em vez de ficar presa.
    */
-  recordReprocessFailure(transactionId: string): Promise<'rescheduled' | 'failed' | 'skipped'> {
-    return this.unitOfWork.run(async (scope) => {
+  async recordReprocessFailure(transactionId: string): Promise<'rescheduled' | 'failed' | 'skipped'> {
+    const { outcome, kind } = await this.unitOfWork.run(async (scope) => {
       const locked = await this.lockPending(scope, transactionId);
-      if (!locked) return 'skipped';
+      if (!locked) return { outcome: 'skipped' as const };
       const { ticket } = locked;
       const attempt = ticket.attempts + 1;
       if (attempt >= this.settings.referenceRetry.maxAttempts) {
         ticket.transaction.fail({ code: FailureCode.PermanentProcessingError, at: this.clock.now() });
         await scope.transactions.update(ticket.transaction, { schedule: { attempts: attempt } });
-        return 'failed';
+        return { outcome: 'failed' as const, kind: ticket.transaction.kind };
       }
       await scope.transactions.update(ticket.transaction, {
         schedule: { attempts: attempt, nextAttemptInMs: referenceRetryDelayMs(attempt, this.settings.referenceRetry) },
       });
-      return 'rescheduled';
+      return { outcome: 'rescheduled' as const, kind: ticket.transaction.kind };
     });
+    if (outcome === 'rescheduled') this.telemetry.retryScheduled('pending_reference');
+    if (outcome === 'failed' && kind) this.telemetry.transactionDecided(WagerTransactionStatus.Failed, kind);
+    return outcome;
+  }
+
+  /** Sinais emitidos só depois do commit: uma tentativa desfeita não conta. */
+  private observeSubmission(
+    source: IngressSource,
+    kind: WagerTransactionKind,
+    result: WagerTransactionResult,
+    startedAt: number,
+  ): void {
+    if (result.idempotentReplay) this.telemetry.duplicateDetected(source);
+    else this.telemetry.transactionDecided(result.status, kind);
+    this.telemetry.processingDuration(source, (performance.now() - startedAt) / 1000);
   }
 
   private async withDeadlockRetry<T>(work: () => Promise<T>): Promise<T> {
@@ -156,6 +190,9 @@ export class ProcessWagerTransactionUseCase {
       try {
         return await work();
       } catch (error) {
+        if (error instanceof TransientFailureError && error.kind !== 'unavailable') {
+          this.telemetry.lockConflict(error.kind);
+        }
         // A wallet é sempre travada primeiro, então deadlock é raro; quando acontece, repetir resolve.
         const retryable = error instanceof TransientFailureError && error.kind === 'deadlock';
         if (!retryable || attempt >= MAX_DEADLOCK_RETRIES) throw error;
@@ -211,15 +248,18 @@ export class ProcessWagerTransactionUseCase {
     return resultOf(transaction, false);
   }
 
-  private async reprocess(scope: TransactionScope, transactionId: string): Promise<ReprocessOutcome> {
+  private async reprocess(
+    scope: TransactionScope,
+    transactionId: string,
+  ): Promise<{ outcome: ReprocessOutcome; transaction?: WagerTransaction }> {
     const locked = await this.lockPending(scope, transactionId);
-    if (!locked) return 'skipped';
+    if (!locked) return { outcome: 'skipped' };
     const { wallet, ticket } = locked;
 
     const at = this.clock.now();
     const evaluation = await this.evaluate(scope, wallet, ticket.transaction, at);
     // Sem o request original, o correlationId dos eventos é a própria transação.
-    return this.decide({
+    const outcome = await this.decide({
       scope,
       wallet,
       transaction: ticket.transaction,
@@ -228,6 +268,7 @@ export class ProcessWagerTransactionUseCase {
       correlationId: ticket.transaction.id,
       at,
     });
+    return { outcome, transaction: ticket.transaction };
   }
 
   /**

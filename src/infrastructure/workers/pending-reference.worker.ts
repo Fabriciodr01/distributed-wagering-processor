@@ -9,6 +9,7 @@ import { TransientFailureError } from '../../application/errors';
 import { ProcessWagerTransactionUseCase } from '../../application/wagering/process-wager-transaction.usecase';
 import type { AppConfig } from '../../config/app-config';
 import { APP_CONFIG } from '../../config/config.module';
+import { runWithLogContext } from '../observability/log-context';
 import { PendingReferenceClaims } from '../persistence/pending-reference-claims';
 import { PollingLoop } from './polling-loop';
 
@@ -46,7 +47,7 @@ export class PendingReferenceWorker implements OnApplicationBootstrap, BeforeApp
     const { batchSize, leaseMs } = this.config.pendingReference;
     const ids = await this.claims.claimDue(batchSize, leaseMs);
     for (const id of ids) {
-      await this.reprocess(id);
+      await runWithLogContext({ transactionId: id, correlationId: id }, () => this.reprocess(id));
     }
     return ids.length;
   }

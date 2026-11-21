@@ -1,4 +1,5 @@
 import type { InboxMessage } from '../../domain/inbox-message';
+import type { Money } from '../../domain/money';
 import type { OutboxMessage } from '../../domain/outbox-message';
 import type { WagerTransaction } from '../../domain/wager-transaction';
 import type { Wallet } from '../../domain/wallet';
@@ -70,8 +71,16 @@ export interface PositionedLedgerEntry {
   readonly position: bigint;
 }
 
+/** Totais do ledger de uma wallet, somados em numeric no banco (créditos e débitos separados). */
+export interface LedgerSummary {
+  readonly credits: Money;
+  readonly debits: Money;
+  readonly entries: number;
+}
+
 export interface LedgerRepository {
   append(entry: WalletLedgerEntry): Promise<void>;
+  summarize(walletId: string, currency: string): Promise<LedgerSummary>;
   page(walletId: string, currency: string, query: LedgerPageQuery): Promise<LedgerPage>;
 }
 

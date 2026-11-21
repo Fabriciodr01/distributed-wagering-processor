@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Inject, Param, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Inject, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import type { z } from 'zod';
 import { ID_GENERATOR, type IdGenerator } from '../../../application/ports/id-generator.port';
@@ -8,6 +8,7 @@ import { ProcessWagerTransactionUseCase } from '../../../application/wagering/pr
 import { assertCanActAs, CurrentProvider, ProviderAuthGuard } from '../auth/provider-auth.guard';
 import { RequestValidationError } from '../errors/request-validation.error';
 import { uuidSchema } from '../../contracts/common.schemas';
+import { addLogContext, currentLogContext } from '../../observability/log-context';
 import { ZodValidationPipe } from '../validation/zod-validation.pipe';
 import {
   presentSubmission,
@@ -17,7 +18,6 @@ import {
   type TransactionResponse,
 } from './wager-transaction.presenter';
 import {
-  correlationIdSchema,
   idempotencyKeySchema,
   type WagerTransactionPayload,
   wagerTransactionPayloadSchema,
@@ -26,6 +26,8 @@ import {
 @Controller()
 @UseGuards(ProviderAuthGuard)
 export class WageringController {
+  private readonly logger = new Logger(WageringController.name);
+
   constructor(
     private readonly processTransaction: ProcessWagerTransactionUseCase,
     private readonly getTransaction: GetWagerTransactionUseCase,
@@ -35,17 +37,23 @@ export class WageringController {
   @Post('wagering/transactions')
   async submit(
     @Headers('idempotency-key') idempotencyKey: unknown,
-    @Headers('x-correlation-id') correlationId: unknown,
     @Body(new ZodValidationPipe(wagerTransactionPayloadSchema)) body: WagerTransactionPayload,
     @CurrentProvider() identity: ProviderIdentity,
     @Res({ passthrough: true }) response: Response,
   ): Promise<SubmissionResponse> {
     assertCanActAs(identity, body.providerId);
+    addLogContext({ walletId: body.walletId, providerId: body.providerId });
     const result = await this.processTransaction.execute({
       ...body,
       idempotencyKey: header('Idempotency-Key', idempotencyKeySchema, idempotencyKey),
-      correlationId: correlationIdSchema.safeParse(correlationId).data ?? this.ids.next(),
+      // Definido pelo middleware de correlação (X-Correlation-Id recebido ou gerado).
+      correlationId: currentLogContext().correlationId ?? this.ids.next(),
     });
+    addLogContext({ transactionId: result.transactionId });
+    this.logger.log(
+      { kind: body.kind, status: result.status, failureCode: result.failureCode, idempotentReplay: result.idempotentReplay },
+      'Transação recebida pela API',
+    );
     response.status(submissionStatus(result.status));
     return presentSubmission(result);
   }

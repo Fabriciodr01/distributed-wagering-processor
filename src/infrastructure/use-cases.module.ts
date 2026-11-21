@@ -8,12 +8,14 @@ import {
   OUTBOX_STORE,
   type OutboxStore,
 } from '../application/ports/outbox.port';
+import { TELEMETRY, type Telemetry } from '../application/ports/telemetry.port';
 import { UNIT_OF_WORK, type UnitOfWork } from '../application/ports/unit-of-work.port';
 import { GetWagerTransactionUseCase } from '../application/wagering/get-wager-transaction.usecase';
 import { ProcessWagerTransactionUseCase } from '../application/wagering/process-wager-transaction.usecase';
 import { CreateWalletUseCase } from '../application/wallets/create-wallet.usecase';
 import { GetWalletUseCase } from '../application/wallets/get-wallet.usecase';
 import { ListWalletLedgerUseCase } from '../application/wallets/list-wallet-ledger.usecase';
+import { ReconcileWalletUseCase } from '../application/wallets/reconcile-wallet.usecase';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/config.module';
 
@@ -21,6 +23,7 @@ const USE_CASES = [
   CreateWalletUseCase,
   GetWalletUseCase,
   ListWalletLedgerUseCase,
+  ReconcileWalletUseCase,
   ProcessWagerTransactionUseCase,
   GetWagerTransactionUseCase,
   PublishOutboxUseCase,
@@ -49,16 +52,27 @@ const USE_CASES = [
       useFactory: (uow: UnitOfWork) => new ListWalletLedgerUseCase(uow),
     },
     {
+      provide: ReconcileWalletUseCase,
+      inject: [UNIT_OF_WORK, TELEMETRY],
+      useFactory: (uow: UnitOfWork, telemetry: Telemetry) => new ReconcileWalletUseCase(uow, telemetry),
+    },
+    {
       provide: ProcessWagerTransactionUseCase,
-      inject: [UNIT_OF_WORK, CLOCK, ID_GENERATOR, APP_CONFIG],
-      useFactory: (uow: UnitOfWork, clock: Clock, ids: IdGenerator, config: AppConfig) =>
-        new ProcessWagerTransactionUseCase(uow, clock, ids, {
-          referenceRetry: {
-            baseDelayMs: config.pendingReference.baseDelayMs,
-            maxDelayMs: config.pendingReference.maxDelayMs,
-            maxAttempts: config.pendingReference.maxAttempts,
+      inject: [UNIT_OF_WORK, CLOCK, ID_GENERATOR, APP_CONFIG, TELEMETRY],
+      useFactory: (uow: UnitOfWork, clock: Clock, ids: IdGenerator, config: AppConfig, telemetry: Telemetry) =>
+        new ProcessWagerTransactionUseCase(
+          uow,
+          clock,
+          ids,
+          {
+            referenceRetry: {
+              baseDelayMs: config.pendingReference.baseDelayMs,
+              maxDelayMs: config.pendingReference.maxDelayMs,
+              maxAttempts: config.pendingReference.maxAttempts,
+            },
           },
-        }),
+          telemetry,
+        ),
     },
     {
       provide: GetWagerTransactionUseCase,
@@ -67,9 +81,14 @@ const USE_CASES = [
     },
     {
       provide: PublishOutboxUseCase,
-      inject: [OUTBOX_STORE, EVENT_PUBLISHER, APP_CONFIG],
-      useFactory: (store: OutboxStore, publisher: EventPublisher, config: AppConfig) =>
-        new PublishOutboxUseCase(store, publisher, { baseDelayMs: 1000, maxDelayMs: config.outbox.maxBackoffMs }),
+      inject: [OUTBOX_STORE, EVENT_PUBLISHER, APP_CONFIG, TELEMETRY],
+      useFactory: (store: OutboxStore, publisher: EventPublisher, config: AppConfig, telemetry: Telemetry) =>
+        new PublishOutboxUseCase(
+          store,
+          publisher,
+          { baseDelayMs: 1000, maxDelayMs: config.outbox.maxBackoffMs },
+          telemetry,
+        ),
     },
   ],
   exports: USE_CASES,

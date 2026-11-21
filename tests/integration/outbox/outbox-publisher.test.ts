@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { CLOCK, type Clock } from '../../../src/application/ports/clock.port';
 import { ID_GENERATOR, type IdGenerator } from '../../../src/application/ports/id-generator.port';
 import { OUTBOX_STORE, type OutboxStore } from '../../../src/application/ports/outbox.port';
+import { TELEMETRY, type Telemetry } from '../../../src/application/ports/telemetry.port';
 import { UNIT_OF_WORK, type UnitOfWork } from '../../../src/application/ports/unit-of-work.port';
 import { ProcessWagerTransactionUseCase } from '../../../src/application/wagering/process-wager-transaction.usecase';
 import { Money } from '../../../src/domain/money';
@@ -109,6 +110,7 @@ describe('publisher da outbox', () => {
       app.app.get<Clock>(CLOCK),
       app.app.get<IdGenerator>(ID_GENERATOR),
       { referenceRetry: { baseDelayMs: 1000, maxDelayMs: 1000, maxAttempts: 3 } },
+      app.app.get<Telemetry>(TELEMETRY),
     );
 
     await expect(
