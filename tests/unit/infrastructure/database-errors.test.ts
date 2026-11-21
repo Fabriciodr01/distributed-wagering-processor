@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { classifyTransient, databaseErrorCode, violatedConstraint } from '../../../src/infrastructure/persistence/database-errors';
+import { TransientFailureError } from '../../../src/application/errors';
+import {
+  classifyTransient,
+  databaseErrorCode,
+  violatedConstraint,
+  withDatabaseErrors,
+} from '../../../src/infrastructure/persistence/database-errors';
 
 const pgError = (code: string, extra: Record<string, unknown> = {}) => Object.assign(new Error('db'), { code, ...extra });
 
@@ -31,5 +37,20 @@ describe('classificação de erros do banco', () => {
   test('erro sem código só é transitório se for de conexão', () => {
     expect(classifyTransient(new Error('Connection terminated unexpectedly'))).toBe('unavailable');
     expect(classifyTransient(new Error('bug qualquer'))).toBeUndefined();
+  });
+});
+
+describe('withDatabaseErrors', () => {
+  test('falha transitória vira TransientFailureError com o tipo e a causa', async () => {
+    const original = pgError('55P03');
+    const error = await withDatabaseErrors(() => Promise.reject(original)).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TransientFailureError);
+    expect(error).toMatchObject({ kind: 'lock_timeout', cause: original });
+  });
+
+  test('erro permanente passa sem alteração, e sucesso devolve o resultado', async () => {
+    const original = pgError('23505');
+    expect(await withDatabaseErrors(() => Promise.reject(original)).catch((e: unknown) => e)).toBe(original);
+    expect(await withDatabaseErrors(async () => 42)).toBe(42);
   });
 });

@@ -1,4 +1,4 @@
-import { type TransientFailureKind } from '../../application/errors';
+import { TransientFailureError, type TransientFailureKind } from '../../application/errors';
 
 interface DatabaseErrorShape {
   readonly code?: unknown;
@@ -51,4 +51,19 @@ export function classifyTransient(error: unknown): TransientFailureKind | undefi
     return 'unavailable';
   }
   return undefined;
+}
+
+/**
+ * Único ponto de tradução de erro de banco para a aplicação: falha transitória vira
+ * `TransientFailureError` (503 na API, retry na fila e nos workers); o resto segue igual.
+ * Todo acesso ao Postgres fora dos repositórios passa por aqui.
+ */
+export async function withDatabaseErrors<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    const kind = classifyTransient(error);
+    if (kind) throw new TransientFailureError(kind, { cause: error });
+    throw error;
+  }
 }

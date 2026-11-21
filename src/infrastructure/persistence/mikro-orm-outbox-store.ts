@@ -1,9 +1,8 @@
 import { MikroORM } from '@mikro-orm/postgresql';
 import { Injectable } from '@nestjs/common';
-import { TransientFailureError } from '../../application/errors';
 import type { ClaimedOutboxBatch, OutboxStore } from '../../application/ports/outbox.port';
 import { OutboxMessage } from '../../domain/outbox-message';
-import { classifyTransient } from './database-errors';
+import { withDatabaseErrors } from './database-errors';
 
 // SQL cru não passa pela hidratação do ORM: datas e jsonb podem chegar como texto.
 interface ClaimedRow {
@@ -95,13 +94,7 @@ export class MikroOrmOutboxStore implements OutboxStore {
     return row ? toDate(row.now) : new Date();
   }
 
-  private async execute<T = unknown>(sql: string, params: unknown[] = []): Promise<T> {
-    try {
-      return (await this.orm.em.fork().execute(sql, params)) as T;
-    } catch (error) {
-      const kind = classifyTransient(error);
-      if (kind) throw new TransientFailureError(kind, { cause: error });
-      throw error;
-    }
+  private execute<T = unknown>(sql: string, params: unknown[] = []): Promise<T> {
+    return withDatabaseErrors(async () => (await this.orm.em.fork().execute(sql, params)) as T);
   }
 }

@@ -1,7 +1,6 @@
 import { MikroORM } from '@mikro-orm/postgresql';
 import { Injectable } from '@nestjs/common';
-import { TransientFailureError } from '../../application/errors';
-import { classifyTransient } from './database-errors';
+import { withDatabaseErrors } from './database-errors';
 
 /**
  * Reserva transações PENDING_REFERENCE vencidas para esta instância, por um lease.
@@ -14,8 +13,8 @@ export class PendingReferenceClaims {
   constructor(private readonly orm: MikroORM) {}
 
   async claimDue(limit: number, leaseMs: number): Promise<string[]> {
-    try {
-      const rows = await this.orm.em.fork().execute<Array<{ id: string }>>(
+    const rows = await withDatabaseErrors(() =>
+      this.orm.em.fork().execute<Array<{ id: string }>>(
         `UPDATE wager_transactions
             SET lease_until = now() + (?::int * interval '1 millisecond')
           WHERE id IN (
@@ -29,12 +28,8 @@ export class PendingReferenceClaims {
           )
           RETURNING id`,
         [leaseMs, limit],
-      );
-      return rows.map((row) => row.id);
-    } catch (error) {
-      const kind = classifyTransient(error);
-      if (kind) throw new TransientFailureError(kind, { cause: error });
-      throw error;
-    }
+      ),
+    );
+    return rows.map((row) => row.id);
   }
 }
