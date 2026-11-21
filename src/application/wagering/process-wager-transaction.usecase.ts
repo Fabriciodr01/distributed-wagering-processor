@@ -284,7 +284,7 @@ export class ProcessWagerTransactionUseCase {
     return { wallet, ticket };
   }
 
-  /** Grava o resultado e os eventos da D-09 na outbox. */
+  /** Grava o resultado e os eventos correspondentes na outbox (D-08). */
   private async decide(decision: Decision): Promise<ReprocessOutcome> {
     const { scope, wallet, transaction, evaluation, attempt, correlationId, at } = decision;
     const ctx = (): EventContext => ({ eventId: this.ids.next(), correlationId, occurredAt: at });
@@ -322,7 +322,7 @@ export class ProcessWagerTransactionUseCase {
     return outcome;
   }
 
-  /** Regras D-07 na ordem documentada. Só move saldo no caminho "processed". */
+  /** Regras em ordem: estruturais, depois a referência, por fim o saldo. Só move saldo em "processed". */
   private async evaluate(
     scope: TransactionScope,
     wallet: Wallet,

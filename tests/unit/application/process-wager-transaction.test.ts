@@ -111,7 +111,7 @@ describe('BET, WIN e LOSS', () => {
   });
 });
 
-describe('ordem das regras (D-07)', () => {
+describe('ordem das regras', () => {
   test('moeda é conferida antes do dono: as duas erradas → CURRENCY_MISMATCH', async () => {
     const result = await useCase.execute(
       command({ playerId: 'outro', money: Money.from({ amount: '1.00', currency: 'USD' }) }),

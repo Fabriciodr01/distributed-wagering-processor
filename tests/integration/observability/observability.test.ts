@@ -225,7 +225,7 @@ describe('logs estruturados', () => {
 });
 
 describe('métricas', () => {
-  test('/metrics expõe todas as métricas da D-16', async () => {
+  test('/metrics expõe todas as métricas', async () => {
     const { baseUrl } = await setup();
     const exposition = await scrape(baseUrl);
     for (const name of [
