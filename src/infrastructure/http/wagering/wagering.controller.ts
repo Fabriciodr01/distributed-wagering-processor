@@ -61,8 +61,12 @@ export class WageringController {
   @Get('wagering/transactions/:transactionId')
   async findById(
     @Param('transactionId', new ZodValidationPipe(uuidSchema)) transactionId: string,
+    @CurrentProvider() identity: ProviderIdentity,
   ): Promise<TransactionResponse> {
-    return presentTransaction(await this.getTransaction.byId(transactionId));
+    const transaction = await this.getTransaction.byId(transactionId);
+    // O provider só vem na linha: a checagem é depois de ler (403 se for de outro provider).
+    assertCanActAs(identity, transaction.providerId);
+    return presentTransaction(transaction);
   }
 
   @Get('providers/:providerId/wagering/transactions/:externalTransactionId')

@@ -219,13 +219,27 @@ describe('GET /wallets/:walletId/ledger', () => {
     ['limit não numérico', 'limit=abc'],
     ['limit fracionário', 'limit=1.5'],
     ['cursor malformado', 'cursor=%25%25%25'],
-    ['cursor com conteúdo inválido', `cursor=${Buffer.from('v1:abc').toString('base64url')}`],
+    ['cursor com conteúdo inválido', `cursor=${Buffer.from('v2:abc').toString('base64url')}`],
+    ['cursor v1 (sem wallet)', `cursor=${Buffer.from('v1:1').toString('base64url')}`],
     ['cursor de outro formato', `cursor=${Buffer.from('42').toString('base64url')}`],
   ])('%s → 400 VALIDATION_ERROR', async (_, query) => {
     const wallet = await createWallet('1.00');
     const res = await api.get(`/wallets/${wallet.id}/ledger?${query}`);
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  test('cursor de outra wallet → 400 VALIDATION_ERROR', async () => {
+    const owner = await walletWithEntries(3);
+    const page = await api.get(`/wallets/${owner.walletId}/ledger?limit=1`);
+    expect(page.body.nextCursor).toEqual(expect.any(String));
+
+    const other = await createWallet('5.00');
+    const res = await api.get(`/wallets/${other.id}/ledger?cursor=${page.body.nextCursor}`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatchObject({ code: 'VALIDATION_ERROR', details: [{ field: 'cursor' }] });
+    // O mesmo cursor continua valendo na wallet de origem.
+    expect((await api.get(`/wallets/${owner.walletId}/ledger?cursor=${page.body.nextCursor}`)).status).toBe(200);
   });
 
   test('wallet inexistente → 404', async () => {

@@ -20,7 +20,7 @@ export class ListWalletLedgerUseCase {
   constructor(private readonly unitOfWork: UnitOfWork) {}
 
   async execute(query: ListWalletLedgerQuery): Promise<WalletLedgerPage> {
-    const before = query.cursor === undefined ? undefined : LedgerCursor.decode(query.cursor);
+    const before = query.cursor === undefined ? undefined : LedgerCursor.decode(query.cursor, query.walletId);
 
     const page = await this.unitOfWork.run(
       async ({ wallets, ledger }) => {
@@ -34,7 +34,7 @@ export class ListWalletLedgerUseCase {
     const last = page.entries.at(-1);
     return {
       items: page.entries.map(({ entry }) => entry),
-      nextCursor: page.hasMore && last ? LedgerCursor.encode(last.position) : null,
+      nextCursor: page.hasMore && last ? LedgerCursor.encode(query.walletId, last.position) : null,
     };
   }
 }
