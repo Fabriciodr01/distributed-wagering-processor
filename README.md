@@ -44,8 +44,11 @@ bun run infra:test:down
 | `bun run test:integration` | PostgreSQL e MiniStack reais, HTTP real |
 | `bun run test:concurrency` | paralelismo real: `Promise.all` contra o Postgres e 3 processos da aplicação ao mesmo tempo, crash após o commit, restart com consistência eventual |
 | `bun run test:docker` | a suíte inteira dentro de um container Linux |
+| `bun run test:load` | teste de carga (bônus): 3 instâncias, hot wallet, wallets espalhadas e 10% de duplicatas; grava `load-test-report.md` |
 
 No Windows, o SIGTERM não chega ao processo filho, então os testes de encerramento gracioso são pulados no host. `bun run test:docker` roda tudo em Linux.
+
+Validado com `bun run test:docker` e `docker compose up -d --build --wait` (3 instâncias healthy) em clone limpo.
 
 Toda suíte termina conferindo, para todas as wallets do banco, que o saldo materializado é igual ao saldo reconstruído pelo ledger.
 
@@ -63,6 +66,15 @@ Os 8 cenários de concorrência da seção 13 do enunciado:
 | 6 | Dois publishers na mesma outbox | `tests/integration/outbox/outbox-publisher.test.ts` — "dois publishers sobre a mesma outbox…"; `tests/concurrency/multi-instance.test.ts` (3 publishers) |
 | 7 | ROLLBACK/REFUND antes da referência | `tests/integration/workers/pending-reference.test.ts` — "REFUND chega antes da BET…", "dois workers sobre as mesmas pendências…" |
 | 8 | Restart com prova de consistência eventual | `tests/concurrency/restart-eventual-consistency.test.ts`; `tests/integration/sqs/wager-transactions-consumer.test.ts` — "falha transitória (Postgres fora)…" |
+
+## Teste de carga
+
+```bash
+bun run infra:test:up
+bun run test:load       # parâmetros por env: LOAD_CONCURRENCY, LOAD_HOT_REQUESTS, LOAD_SPREAD_WALLETS…
+```
+
+O script sobe 3 instâncias em processos separados contra a infraestrutura de teste, roda os três cenários, confere saldo = ledger e a reconciliação de todas as wallets e grava [`load-test-report.md`](load-test-report.md) (ambiente, metodologia, throughput, p50/p95/p99, taxa de erro, replays, conflitos e espera de lock, lag e drenagem da outbox). O throughput de uma única wallet é limitado de propósito pelo lock da linha (ver `ARCHITECTURE.md`, D-05).
 
 ## Arquitetura
 

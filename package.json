@@ -17,6 +17,7 @@
     "test:concurrency": "bun test tests/concurrency",
     "test": "bun run test:unit && bun run test:integration && bun run test:concurrency",
     "check": "bun run typecheck && bun run test",
+    "test:load": "bun scripts/load-test.ts",
     "test:docker": "docker compose -f docker-compose.test.yml run --rm tests",
     "start": "bun src/main.ts",
     "start:dev": "bun --watch src/main.ts"
