@@ -1,0 +1,3 @@
+[test]
+# Os testes de integração sobem banco, filas e a aplicação Nest de verdade.
+timeout = 30000

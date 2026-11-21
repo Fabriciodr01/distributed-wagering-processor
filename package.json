@@ -1,0 +1,46 @@
+{
+  "name": "distributed-wagering-processor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "infra:up": "docker compose up -d --wait postgres ministack",
+    "infra:down": "docker compose down",
+    "infra:test:up": "docker compose -f docker-compose.test.yml up -d --wait",
+    "infra:test:down": "docker compose -f docker-compose.test.yml down -v",
+    "infra:init": "bun scripts/infra-init-queues.ts",
+    "db:migrate": "bun scripts/migrate.ts up",
+    "db:migrate:down": "bun scripts/migrate.ts down",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test tests/integration",
+    "test:concurrency": "bun test --pass-with-no-tests tests/concurrency",
+    "test": "bun run test:unit && bun run test:integration && bun run test:concurrency",
+    "check": "bun run typecheck && bun run test",
+    "test:docker": "docker compose -f docker-compose.test.yml run --rm tests",
+    "start": "bun src/main.ts",
+    "start:dev": "bun --watch src/main.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sqs": "3.1174.0",
+    "@mikro-orm/core": "7.2.11",
+    "@mikro-orm/migrations": "7.2.11",
+    "@mikro-orm/nestjs": "7.1.0",
+    "@mikro-orm/postgresql": "7.2.11",
+    "@nestjs/common": "12.6.0",
+    "@nestjs/core": "12.6.0",
+    "@nestjs/platform-express": "12.6.0",
+    "nestjs-pino": "5.3.2",
+    "pino": "10.4.0",
+    "pino-http": "11.0.0",
+    "prom-client": "15.1.3",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.5",
+    "@types/express": "5.0.6",
+    "typescript": "5.9.3"
+  }
+}
