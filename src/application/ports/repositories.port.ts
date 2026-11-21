@@ -16,9 +16,22 @@ export interface WalletRepository {
   update(wallet: Wallet): Promise<void>;
 }
 
-export interface TransactionUpdateOptions {
-  /** Agenda a próxima reavaliação de PENDING_REFERENCE a partir do relógio do banco. */
+/** Agendamento de uma transação PENDING_REFERENCE; o lease do worker é liberado junto. */
+export interface ReferenceRetrySchedule {
+  /** Avaliações já feitas, contando a da submissão. */
+  readonly attempts: number;
+  /** Próxima reavaliação, a partir do relógio do banco (comum a todas as instâncias). */
   readonly nextAttemptInMs?: number;
+}
+
+export interface TransactionUpdateOptions {
+  readonly schedule?: ReferenceRetrySchedule;
+}
+
+/** Transação aguardando referência, travada para reavaliação. */
+export interface PendingReferenceTicket {
+  readonly transaction: WagerTransaction;
+  readonly attempts: number;
 }
 
 export interface WagerTransactionRepository {
@@ -35,6 +48,8 @@ export interface WagerTransactionRepository {
   findByExternalId(providerId: string, externalTransactionId: string): Promise<WagerTransaction | null>;
   /** true se a transação já foi revertida por um REFUND ou ROLLBACK aplicado. */
   isReversed(referenceTransactionId: string): Promise<boolean>;
+  /** Trava a linha se ela ainda estiver PENDING_REFERENCE; null se já foi decidida. */
+  findPendingForUpdate(transactionId: string): Promise<PendingReferenceTicket | null>;
 }
 
 export interface LedgerPageQuery {

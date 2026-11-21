@@ -45,7 +45,11 @@ const USE_CASES = [
       inject: [UNIT_OF_WORK, CLOCK, ID_GENERATOR, APP_CONFIG],
       useFactory: (uow: UnitOfWork, clock: Clock, ids: IdGenerator, config: AppConfig) =>
         new ProcessWagerTransactionUseCase(uow, clock, ids, {
-          referenceRetryBaseDelayMs: config.pendingReference.baseDelayMs,
+          referenceRetry: {
+            baseDelayMs: config.pendingReference.baseDelayMs,
+            maxDelayMs: config.pendingReference.maxDelayMs,
+            maxAttempts: config.pendingReference.maxAttempts,
+          },
         }),
     },
     {

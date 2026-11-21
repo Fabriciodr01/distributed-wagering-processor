@@ -1,5 +1,6 @@
-import type { SqlEntityManager } from '@mikro-orm/postgresql';
+import { LockMode, type SqlEntityManager } from '@mikro-orm/postgresql';
 import type {
+  PendingReferenceTicket,
   TransactionUpdateOptions,
   WagerTransactionRepository,
 } from '../../../application/ports/repositories.port';
@@ -29,6 +30,21 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
 
   async update(transaction: WagerTransaction, options: TransactionUpdateOptions = {}): Promise<void> {
     const row = WagerTransactionMapper.fromDomain(transaction);
+    const { schedule } = options;
+    if (schedule) {
+      // Antes do status: depois de terminal, o trigger não deixa a linha mudar mais.
+      // Relógio do banco, que é o que os workers de todas as instâncias comparam. O lease é
+      // liberado porque a avaliação que o reservou terminou.
+      await this.em.execute(
+        `UPDATE wager_transactions
+            SET attempts = ?,
+                next_attempt_at = CASE WHEN ?::int IS NULL THEN next_attempt_at
+                                       ELSE now() + (?::int * interval '1 millisecond') END,
+                lease_until = NULL
+          WHERE id = ?`,
+        [schedule.attempts, schedule.nextAttemptInMs ?? null, schedule.nextAttemptInMs ?? null, transaction.id],
+      );
+    }
     await this.em.nativeUpdate(
       WagerTransactionRow,
       { id: transaction.id },
@@ -38,15 +54,10 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
         resultingBalance: row.resultingBalance,
         referenceTransactionId: row.referenceTransactionId,
         processedAt: row.processedAt,
+        // Qualquer decisão encerra a avaliação que reservou a linha.
+        leaseUntil: null,
       },
     );
-    if (options.nextAttemptInMs !== undefined) {
-      // Relógio do banco: é ele que os workers de todas as instâncias comparam.
-      await this.em.execute(
-        `UPDATE wager_transactions SET next_attempt_at = now() + (? * interval '1 millisecond') WHERE id = ?`,
-        [Math.trunc(options.nextAttemptInMs), transaction.id],
-      );
-    }
   }
 
   async findById(transactionId: string): Promise<WagerTransaction | null> {
@@ -68,6 +79,15 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
       status: WagerTransactionStatus.Processed,
     });
     return count > 0;
+  }
+
+  async findPendingForUpdate(transactionId: string): Promise<PendingReferenceTicket | null> {
+    const row = await this.em.findOne(
+      WagerTransactionRow,
+      { id: transactionId, status: WagerTransactionStatus.PendingReference },
+      { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true },
+    );
+    return row ? { transaction: WagerTransactionMapper.toDomain(row), attempts: row.attempts } : null;
   }
 
   private async findOne(where: Partial<WagerTransactionRow>): Promise<WagerTransaction | null> {

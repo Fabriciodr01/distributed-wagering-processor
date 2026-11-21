@@ -11,6 +11,7 @@ import { HealthModule } from './infrastructure/observability/health.module';
 import { buildOrmOptions } from './infrastructure/persistence/mikro-orm.config';
 import { PersistenceModule } from './infrastructure/persistence/persistence.module';
 import { UseCasesModule } from './infrastructure/use-cases.module';
+import { WorkersModule } from './infrastructure/workers/workers.module';
 
 @Module({})
 export class AppModule {
@@ -27,6 +28,7 @@ export class AppModule {
         PersistenceModule,
         UseCasesModule,
         HealthModule,
+        WorkersModule,
         // Health fica sempre de pé; a API de negócio só nas instâncias com o papel HTTP.
         ...(config.roles.http ? [AuthModule, WalletsHttpModule, WageringHttpModule] : []),
       ],
