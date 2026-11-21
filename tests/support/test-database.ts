@@ -1,5 +1,6 @@
 import { SQL } from 'bun';
 import { runMigrations } from '../../src/infrastructure/persistence/migrate';
+import { assertAllWalletsMatchLedger } from './assert-wallet-matches-ledger';
 import { testInfra, uniqueSuffix } from './test-env';
 
 export interface TestDatabase {
@@ -36,13 +37,19 @@ export async function createTestDatabase(options: { migrate?: boolean } = {}): P
     name,
     url,
     sql,
+    /** Confere a invariante saldo == ledger de todas as wallets e só então apaga o banco. */
     async drop() {
-      await sql.close();
-      const cleanup = new SQL(testInfra.adminDatabaseUrl, { max: 1 });
       try {
-        await cleanup.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+        const [schema] = await sql`SELECT to_regclass('public.wallets') IS NOT NULL AS migrated`;
+        if (schema?.migrated) await assertAllWalletsMatchLedger(sql);
       } finally {
-        await cleanup.close();
+        await sql.close();
+        const cleanup = new SQL(testInfra.adminDatabaseUrl, { max: 1 });
+        try {
+          await cleanup.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+        } finally {
+          await cleanup.close();
+        }
       }
     },
   };
