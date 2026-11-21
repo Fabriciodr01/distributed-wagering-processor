@@ -52,6 +52,13 @@ export interface WagerTransactionRepository {
   isReversed(referenceTransactionId: string): Promise<boolean>;
   /** Trava a linha se ela ainda estiver PENDING_REFERENCE; null se já foi decidida. */
   findPendingForUpdate(transactionId: string): Promise<PendingReferenceTicket | null>;
+  /**
+   * Antecipa para agora a próxima reavaliação das transações PENDING_REFERENCE que
+   * referenciam `(providerId, externalTransactionId)`. Chamado na mesma transação que
+   * decide a referência: o worker as pega na próxima rodada, sem esperar o backoff.
+   * Devolve quantas foram antecipadas.
+   */
+  wakeDependents(providerId: string, externalTransactionId: string): Promise<number>;
 }
 
 export interface LedgerPageQuery {

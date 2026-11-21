@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { assertWalletMatchesLedger } from '../../support/assert-wallet-matches-ledger';
 import { eventually } from '../../support/eventually';
+import { httpClient } from '../../support/http';
 import { HASH, type SeededWallet, seedWallet } from '../../support/sql-fixtures';
 import { bodyOf, expectQueueEmpty, queueDepth, receiveMessages, sendRaw } from '../../support/sqs-helpers';
 import { startTestApp, type TestApp } from '../../support/test-app';
@@ -214,7 +215,8 @@ describe('consumidor de wager-transactions.fifo', () => {
     expect(await expectQueueEmpty(queues.client, queues.urls.dlq)).toEqual([]);
   });
 
-  test('transitório persistente até o limite do app: FAILED auditável (PROCESSING_RETRIES_EXHAUSTED) e DLQ', async () => {
+  /** Leva uma mensagem até o limite de retries transitórios do app: FAILED gravado e mensagem na DLQ. */
+  async function exhaustRetries() {
     await setup();
     const wallet = await seedWallet(db.sql, { balance: '100.00' });
     const message = transactionMessage(wallet);
@@ -235,7 +237,7 @@ describe('consumidor de wager-transactions.fifo', () => {
       })
       .catch(() => {});
 
-    await startConsumer({ CONSUMER_RETRY_BASE_S: '0', CONSUMER_MAX_ATTEMPTS: '5', DB_LOCK_TIMEOUT_MS: '200' });
+    const app = await startConsumer({ CONSUMER_RETRY_BASE_S: '0', CONSUMER_MAX_ATTEMPTS: '5', DB_LOCK_TIMEOUT_MS: '200' });
     await send(message, wallet.walletId);
 
     try {
@@ -246,11 +248,48 @@ describe('consumidor de wager-transactions.fifo', () => {
       await holder;
     }
     await waitDrained();
+    return { app, wallet, message };
+  }
+
+  test('transitório persistente até o limite do app: FAILED auditável (PROCESSING_RETRIES_EXHAUSTED) e DLQ', async () => {
+    const { wallet, message } = await exhaustRetries();
     expect(await transactionByExternalId(message.data.externalTransactionId)).toMatchObject({
       status: 'FAILED',
       failure_code: 'PROCESSING_RETRIES_EXHAUSTED',
     });
     expect(await balanceOf(wallet.walletId)).toBe('100.00');
+  });
+
+  test('FAILED é terminal: reenvio com a mesma chave (HTTP ou fila) devolve o FAILED original, sem lançamento', async () => {
+    const { app, wallet, message } = await exhaustRetries();
+    const failed = await transactionByExternalId(message.data.externalTransactionId);
+    const { idempotencyKey, ...body } = message.data;
+
+    const api = httpClient(app.baseUrl);
+    const resent = await api.post('/wagering/transactions', body, { 'idempotency-key': idempotencyKey });
+    expect(resent.status).toBe(422);
+    expect(resent.body).toEqual({
+      transactionId: failed.id,
+      status: 'FAILED',
+      failureCode: 'PROCESSING_RETRIES_EXHAUSTED',
+      idempotentReplay: true,
+    });
+
+    // Pela fila, com outro messageId: também é replay do FAILED, confirmado sem ir para a DLQ.
+    await send(transactionMessage(wallet, message.data), wallet.walletId);
+    await waitDrained();
+    expect(await expectQueueEmpty(queues.client, queues.urls.dlq)).toEqual([]);
+
+    const rows = await db.sql`
+      SELECT status FROM wager_transactions WHERE external_transaction_id = ${message.data.externalTransactionId}`;
+    expect(rows).toEqual([{ status: 'FAILED' }]);
+    const [{ entries }] = await db.sql`
+      SELECT count(*)::int AS entries FROM wallet_ledger_entries l
+        JOIN wager_transactions t ON t.id = l.transaction_id
+       WHERE t.external_transaction_id = ${message.data.externalTransactionId}`;
+    expect(entries).toBe(0);
+    expect(await balanceOf(wallet.walletId)).toBe('100.00');
+    await assertWalletMatchesLedger(db.sql, wallet.walletId);
   });
 
   test('shutdown: conclui a mensagem em andamento e devolve as não iniciadas com visibilidade 0', async () => {

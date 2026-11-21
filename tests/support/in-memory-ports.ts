@@ -230,6 +230,22 @@ export class InMemoryDatabase implements UnitOfWork {
         if (stored?.state.status !== WagerTransactionStatus.PendingReference) return null;
         return { transaction: WagerTransaction.rehydrate(stored.state), attempts: stored.attempts };
       },
+      async wakeDependents(providerId, externalTransactionId) {
+        let woken = 0;
+        for (const [id, stored] of data.transactions) {
+          const { state } = stored;
+          if (
+            state.status === WagerTransactionStatus.PendingReference &&
+            state.providerId === providerId &&
+            state.referenceExternalTransactionId === externalTransactionId &&
+            (stored.nextAttemptInMs ?? 0) > 0
+          ) {
+            data.transactions.set(id, { ...stored, nextAttemptInMs: 0 });
+            woken += 1;
+          }
+        }
+        return woken;
+      },
     };
 
     const ledger: LedgerRepository = {

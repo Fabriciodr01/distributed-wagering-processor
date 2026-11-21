@@ -319,6 +319,11 @@ export class ProcessWagerTransactionUseCase {
     }
 
     await scope.outbox.enqueue(events.map((event) => OutboxMessage.enqueue(event)));
+    // Decidida (aplicada ou recusada), esta transação pode destravar quem a referencia:
+    // essas dependentes voltam a ser elegíveis já, em vez de esperar o backoff (D-06).
+    if (transaction.isTerminal()) {
+      await scope.transactions.wakeDependents(transaction.providerId, transaction.externalTransactionId);
+    }
     return outcome;
   }
 

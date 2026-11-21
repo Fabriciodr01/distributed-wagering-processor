@@ -142,6 +142,61 @@ describe('worker de PENDING_REFERENCE em execução', () => {
   });
 });
 
+describe('referência decidida acorda as dependentes', () => {
+  // Backoff de 60 s: sem acordar, a pendência só seria reavaliada daqui a um minuto.
+  const SLOW = { PENDING_REF_BASE_DELAY_MS: '60000', PENDING_REF_MAX_DELAY_MS: '60000', PENDING_REF_POLL_INTERVAL_MS: '100' };
+  let running: TestApp;
+  let wagering: ReturnType<typeof wageringApi>;
+
+  beforeAll(async () => {
+    ({ app: running, wagering } = await startApp(SLOW));
+  });
+
+  afterAll(async () => {
+    await running?.close();
+  });
+
+  test('REFUND antes da BET: aplicado logo depois da BET, sem esperar o backoff', async () => {
+    const wallet = await wagering.createWallet('100.00');
+    const bet = wagering.transaction(wallet, { money: brl('30.00') });
+    const refund = await wagering.submit(wagering.transaction(wallet, reversalOf('REFUND', bet)));
+    expect(refund.status).toBe(202);
+    const pending = await transactionRow(refund.body.transactionId);
+    expect(pending.due_in_ms).toBeGreaterThan(50_000);
+
+    const startedAt = Date.now();
+    expect((await wagering.submit(bet)).status).toBe(200);
+    // O commit da BET já deixou a dependente vencida; a próxima rodada do worker (100 ms) a aplica.
+    expect((await transactionRow(refund.body.transactionId)).due_in_ms).toBeLessThanOrEqual(0);
+    await eventually(async () => expect((await transactionRow(refund.body.transactionId)).status).toBe('PROCESSED'), {
+      timeout: 2_000,
+      interval: 50,
+    });
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(await balanceOf(wallet.id)).toBe('100.00');
+    await assertWalletMatchesLedger(db.sql, wallet.id);
+  });
+
+  test('referência recusada: a dependente é encerrada logo com REFERENCE_NOT_PROCESSED', async () => {
+    const wallet = await wagering.createWallet('10.00');
+    const bet = wagering.transaction(wallet, { money: brl('50.00') });
+    const rollback = await wagering.submit(wagering.transaction(wallet, reversalOf('ROLLBACK', bet)));
+    expect(rollback.status).toBe(202);
+
+    expect((await wagering.submit(bet)).body.failureCode).toBe('INSUFFICIENT_FUNDS');
+    await eventually(
+      async () =>
+        expect(await transactionRow(rollback.body.transactionId)).toMatchObject({
+          status: 'REJECTED',
+          failure_code: 'REFERENCE_NOT_PROCESSED',
+        }),
+      { timeout: 2_000, interval: 50 },
+    );
+    expect(await balanceOf(wallet.id)).toBe('10.00');
+    await assertWalletMatchesLedger(db.sql, wallet.id);
+  });
+});
+
 describe('limite de tentativas', () => {
   test('referência que nunca chega: REJECTED REFERENCE_NOT_FOUND_EXPIRED com evento, sem lançamento', async () => {
     const { app, wagering } = await startApp({ PENDING_REF_MAX_ATTEMPTS: '3' });

@@ -94,6 +94,25 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
     return row ? { transaction: WagerTransactionMapper.toDomain(row), attempts: row.attempts } : null;
   }
 
+  /**
+   * Só antecipa (nunca adia) e não mexe em `attempts` nem no lease: uma dependente já
+   * reservada por outro worker continua com ele. Usa o índice parcial
+   * `wager_transactions_pending_by_reference`.
+   */
+  async wakeDependents(providerId: string, externalTransactionId: string): Promise<number> {
+    const result = await this.em.execute(
+      `UPDATE wager_transactions
+          SET next_attempt_at = now()
+        WHERE status = 'PENDING_REFERENCE'
+          AND provider_id = ?
+          AND reference_external_transaction_id = ?
+          AND next_attempt_at > now()`,
+      [providerId, externalTransactionId],
+      'run',
+    );
+    return Number((result as { affectedRows?: number }).affectedRows ?? 0);
+  }
+
   private async findOne(where: Partial<WagerTransactionRow>): Promise<WagerTransaction | null> {
     const row = await this.em.findOne(WagerTransactionRow, where, { refresh: true });
     return row ? WagerTransactionMapper.toDomain(row) : null;

@@ -258,6 +258,38 @@ describe('PENDING_REFERENCE', () => {
     ]);
   });
 
+  test('a referência decidida antecipa a reavaliação de quem a referencia (aplicada ou recusada)', async () => {
+    const applied = command({ money: brl('30.00') });
+    const refund = await useCase.execute(reversal(Kind.Refund, applied));
+    const refused = command({ money: brl('999.00') });
+    const rollback = await useCase.execute(reversal(Kind.Rollback, refused));
+    const unrelated = await useCase.execute(command({ kind: Kind.Refund, referenceExternalTransactionId: 'outra' }));
+    for (const id of [refund.transactionId, rollback.transactionId, unrelated.transactionId]) {
+      expect(db.transaction(id).nextAttemptInMs).toBe(1000);
+    }
+
+    expect((await useCase.execute(applied)).status).toBe(Status.Processed);
+    expect((await useCase.execute(refused)).status).toBe(Status.Rejected);
+
+    expect(db.transaction(refund.transactionId).nextAttemptInMs).toBe(0);
+    expect(db.transaction(rollback.transactionId).nextAttemptInMs).toBe(0);
+    // Só antecipa: tentativas e status ficam como estavam, e quem referencia outra coisa não muda.
+    expect(db.transaction(refund.transactionId)).toMatchObject({ attempts: 1 });
+    expect(db.transaction(refund.transactionId).state.status).toBe(Status.PendingReference);
+    expect(db.transaction(unrelated.transactionId).nextAttemptInMs).toBe(1000);
+
+    expect(await useCase.reprocessPendingReference(refund.transactionId)).toBe('processed');
+    expect(await useCase.reprocessPendingReference(rollback.transactionId)).toBe('rejected');
+    expect(db.transaction(rollback.transactionId).state.failureCode).toBe(FailureCode.ReferenceNotProcessed);
+  });
+
+  test('dependente de outro provider não é antecipada', async () => {
+    const bet = command({ money: brl('30.00') });
+    const other = await useCase.execute(reversal(Kind.Refund, bet, { providerId: 'provider-b' }));
+    await useCase.execute(bet);
+    expect(db.transaction(other.transactionId).nextAttemptInMs).toBe(1000);
+  });
+
   test('esgotadas as tentativas: REJECTED REFERENCE_NOT_FOUND_EXPIRED com evento Rejected', async () => {
     const refund = await useCase.execute(command({ kind: Kind.Refund, referenceExternalTransactionId: 'nunca' }));
     const outcomes = [];
