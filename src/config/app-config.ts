@@ -55,6 +55,7 @@ const envSchema = z
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
     FAULT_KILL_AFTER_COMMIT: booleanFlag.default(false),
+    FAULT_PROCESSING_DELAY_MS: nonNegativeInt.default(0),
   })
   .superRefine((env, ctx) => {
     // O redrive da fila é 6; o limite do app precisa vir antes para gravarmos o FAILED auditável.
@@ -122,6 +123,8 @@ export interface AppConfig {
   readonly logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   readonly faults: {
     readonly killAfterCommit: boolean;
+    /** Atraso antes de processar cada mensagem do consumidor (só em teste). */
+    readonly processingDelayMs: number;
   };
 }
 
@@ -198,6 +201,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
     // O gancho de falha só existe em teste, mesmo que a variável vaze para outro ambiente.
     faults: {
       killAfterCommit: env.NODE_ENV === 'test' && env.FAULT_KILL_AFTER_COMMIT,
+      processingDelayMs: env.NODE_ENV === 'test' ? env.FAULT_PROCESSING_DELAY_MS : 0,
     },
   };
 }

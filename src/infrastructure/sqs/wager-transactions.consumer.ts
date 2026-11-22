@@ -34,6 +34,8 @@ import { SQS_CLIENT } from './sqs.tokens';
 
 const MAX_RETRY_DELAY_S = 60;
 const ERROR_PAUSE_MS = 1000;
+/** Piso do intervalo do heartbeat (visibilidade/3), para não martelar o SQS com visibilidade curta. */
+const HEARTBEAT_MIN_MS = 300;
 
 /** Erros que nunca vão dar certo com a mesma mensagem: vão direto para a DLQ. */
 const PERMANENT_ERRORS = [
@@ -61,6 +63,8 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
   private running?: Promise<void>;
   private stopping = false;
   private queueUrls?: { transactions: string; dlq: string };
+  /** Mensagens recebidas e ainda não decididas, com a visibilidade sendo renovada. */
+  private readonly leases = new Map<Message, VisibilityLease>();
 
   constructor(
     @Inject(SQS_CLIENT) private readonly sqs: SQSClient,
@@ -80,8 +84,8 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
   }
 
   /**
-   * Para de buscar, conclui a mensagem em andamento e devolve à fila (visibilidade 0) as
-   * que já tinham sido recebidas mas não começaram.
+   * Para de buscar, conclui as mensagens em andamento (uma por grupo) e devolve à fila
+   * (visibilidade 0) as que já tinham sido recebidas mas não começaram.
    */
   async beforeApplicationShutdown(): Promise<void> {
     this.stopping = true;
@@ -89,30 +93,59 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
     this.running = undefined;
   }
 
-  /** Um ciclo de long polling; devolve quantas mensagens recebeu. */
+  /**
+   * Um ciclo de long polling; devolve quantas mensagens recebeu. Grupos (`MessageGroupId`)
+   * diferentes do lote rodam em paralelo; dentro do grupo, em série e na ordem de chegada.
+   * Enquanto uma mensagem não é decidida, a visibilidade dela é renovada (heartbeat).
+   */
   async pollOnce(): Promise<number> {
     const { transactions } = await this.urls();
+    const { visibilityTimeoutS } = this.config.consumer;
     const { Messages: messages = [] } = await this.sqs.send(
       new ReceiveMessageCommand({
         QueueUrl: transactions,
         MaxNumberOfMessages: 10,
         WaitTimeSeconds: this.config.consumer.waitTimeS,
-        VisibilityTimeout: this.config.consumer.visibilityTimeoutS,
+        VisibilityTimeout: visibilityTimeoutS,
         MessageSystemAttributeNames: ['ApproximateReceiveCount', 'MessageGroupId', 'MessageDeduplicationId'],
       }),
     );
-    // Em ordem: no FIFO, mensagens do mesmo grupo (wallet) chegam na sequência de envio.
-    for (const [index, message] of messages.entries()) {
+    if (messages.length === 0) return 0;
+
+    const leases = messages.map((message) => new VisibilityLease(message, (m) => this.extendVisibility(m)));
+    for (const lease of leases) this.leases.set(lease.message, lease);
+    const heartbeat = setInterval(
+      () => {
+        for (const lease of leases) lease.renew();
+      },
+      Math.max(HEARTBEAT_MIN_MS, (visibilityTimeoutS * 1000) / 3),
+    );
+    try {
+      // allSettled: um grupo que falha não deixa os outros rodando soltos depois do ciclo.
+      const results = await Promise.allSettled(groupByMessageGroup(messages).map((group) => this.handleGroup(group)));
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failure) throw failure.reason;
+    } finally {
+      clearInterval(heartbeat);
+      // O que não foi decidido (grupo interrompido por erro) para de ser renovado e volta à
+      // fila quando a visibilidade expirar, como antes.
+      for (const lease of leases) await this.settle(lease.message);
+    }
+    return messages.length;
+  }
+
+  /** Em série: no FIFO, mensagens do mesmo grupo (wallet) chegam na sequência de envio. */
+  private async handleGroup(group: readonly Message[]): Promise<void> {
+    for (const [index, message] of group.entries()) {
       if (this.stopping) {
-        await this.release(messages.slice(index));
-        break;
+        await this.release(group.slice(index));
+        return;
       }
       // O messageId é o correlationId de tudo o que a mensagem gerar.
       await runWithLogContext({ messageId: message.MessageId, correlationId: message.MessageId }, () =>
         this.handle(message),
       );
     }
-    return messages.length;
   }
 
   private async run(): Promise<void> {
@@ -140,6 +173,10 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
       walletId: command.walletId,
       providerId: command.providerId,
     });
+    if (this.config.faults.processingDelayMs > 0) {
+      // Gancho de teste: processamento mais longo que a visibilidade, para provar o heartbeat.
+      await sleep(this.config.faults.processingDelayMs);
+    }
     try {
       const outcome = await this.useCase.executeFromQueue(command, {
         consumerName: this.config.consumer.name,
@@ -192,12 +229,36 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
 
   private async retryLater(message: Message, receiveCount: number): Promise<void> {
     const delay = Math.min(this.config.consumer.retryBaseS * 2 ** (receiveCount - 1), MAX_RETRY_DELAY_S);
+    await this.settle(message);
     await this.changeVisibility(message, delay);
     this.telemetry.retryScheduled('consumer');
   }
 
   private async release(messages: readonly Message[]): Promise<void> {
-    for (const message of messages) await this.changeVisibility(message, 0);
+    for (const message of messages) {
+      await this.settle(message);
+      await this.changeVisibility(message, 0);
+    }
+  }
+
+  /**
+   * Toda decisão final (ack, retry, DLQ, devolução) passa por aqui antes de falar com o SQS:
+   * para o heartbeat e espera a renovação em voo, que assim nunca sobrescreve a decisão.
+   */
+  private async settle(message: Message): Promise<void> {
+    const lease = this.leases.get(message);
+    if (!lease) return;
+    this.leases.delete(message);
+    await lease.settle();
+  }
+
+  private async extendVisibility(message: Message): Promise<void> {
+    try {
+      await this.changeVisibility(message, this.config.consumer.visibilityTimeoutS);
+    } catch (error) {
+      // Sem a renovação a mensagem pode voltar antes da hora; o inbox cobre a duplicata.
+      this.logger.warn({ messageId: message.MessageId, error: describe(error) }, 'Falha ao renovar a visibilidade');
+    }
   }
 
   private async changeVisibility(message: Message, seconds: number): Promise<void> {
@@ -212,6 +273,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
   }
 
   private async ack(message: Message): Promise<void> {
+    await this.settle(message);
     const { transactions } = await this.urls();
     await this.sqs.send(new DeleteMessageCommand({ QueueUrl: transactions, ReceiptHandle: message.ReceiptHandle }));
   }
@@ -222,6 +284,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
    * continua na fila e é tentada de novo.
    */
   private async deadLetter(message: Message, reason: DeadLetterReason, detail: string): Promise<void> {
+    await this.settle(message);
     const { dlq } = await this.urls();
     this.logger.error({ reason, detail }, 'Mensagem enviada à DLQ');
     await this.sqs.send(
@@ -248,6 +311,43 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
     };
     return this.queueUrls;
   }
+}
+
+/**
+ * Renovação da visibilidade de uma mensagem recebida. As renovações são encadeadas, e
+ * `settle()` encerra a cadeia e espera a que está em voo: a decisão final sobre a mensagem
+ * (ack, backoff, devolução) é sempre a última chamada ao SQS.
+ */
+class VisibilityLease {
+  private chain: Promise<void> = Promise.resolve();
+  private settled = false;
+
+  constructor(
+    readonly message: Message,
+    private readonly extend: (message: Message) => Promise<void>,
+  ) {}
+
+  renew(): void {
+    if (this.settled) return;
+    this.chain = this.chain.then(() => (this.settled ? undefined : this.extend(this.message)));
+  }
+
+  async settle(): Promise<void> {
+    this.settled = true;
+    await this.chain;
+  }
+}
+
+/** Agrupa por `MessageGroupId` mantendo a ordem de chegada dentro de cada grupo. */
+function groupByMessageGroup(messages: readonly Message[]): Message[][] {
+  const groups = new Map<string, Message[]>();
+  for (const message of messages) {
+    const key = message.Attributes?.MessageGroupId ?? message.MessageId ?? '';
+    const group = groups.get(key);
+    if (group) group.push(message);
+    else groups.set(key, [message]);
+  }
+  return [...groups.values()];
 }
 
 function parse(body: string | undefined): ParsedMessage {

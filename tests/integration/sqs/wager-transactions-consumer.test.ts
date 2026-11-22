@@ -1,3 +1,4 @@
+import { ReceiveMessageCommand } from '@aws-sdk/client-sqs';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { assertWalletMatchesLedger } from '../../support/assert-wallet-matches-ledger';
 import { eventually } from '../../support/eventually';
@@ -335,6 +336,143 @@ describe('consumidor de wager-transactions.fifo', () => {
     // Visibilidade 60 s no recebimento: só estão disponíveis de novo porque foram devolvidas com 0.
     const returned = await receiveMessages(queues.client, queues.urls.transactions, { expected: 2, timeoutMs: 5_000 });
     expect(returned.map((m) => bodyOf(m).messageId)).toEqual(messages.slice(1).map((m) => m.messageId));
+    expect(returned.every((m) => m.Attributes?.ApproximateReceiveCount === '2')).toBe(true);
+  });
+
+  /** Segura a linha da wallet numa transação do teste até `release()`. */
+  async function holdWallet(walletId: string) {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const holder = db.sql.begin(async (tx) => {
+      await tx`SELECT 1 FROM wallets WHERE id = ${walletId} FOR UPDATE`;
+      locked();
+      await held;
+    });
+    await lockTaken;
+    return {
+      release: async () => {
+        release();
+        await holder;
+      },
+    };
+  }
+
+  async function lockWaiters(): Promise<number> {
+    const [{ waiting }] = await db.sql`
+      SELECT count(*)::int AS waiting FROM pg_stat_activity
+       WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+    return waiting;
+  }
+
+  test('processamento mais longo que a visibilidade: o heartbeat renova e a mensagem não é reentregue', async () => {
+    await setup();
+    const wallet = await seedWallet(db.sql, { balance: '100.00' });
+    // Visibilidade de 2 s e 5 s de processamento: sem renovação, a mensagem voltaria à fila
+    // no meio do caminho e outro consumidor a receberia (com ApproximateReceiveCount = 2).
+    await startConsumer({ CONSUMER_VISIBILITY_TIMEOUT_S: '2', FAULT_PROCESSING_DELAY_MS: '5000' });
+    const message = transactionMessage(wallet);
+    await send(message, wallet.walletId);
+    await eventually(async () => expect((await queueDepth(queues.client, queues.urls.transactions)).inFlight).toBe(1), {
+      timeout: 10_000,
+      interval: 100,
+    });
+    const receivedAt = Date.now();
+
+    // Um "outro consumidor" disputa a fila durante todo o processamento: não pode receber nada.
+    const stolen: Array<string | undefined> = [];
+    while (!(await transactionByExternalId(message.data.externalTransactionId))) {
+      const { Messages = [] } = await queues.client.send(
+        new ReceiveMessageCommand({
+          QueueUrl: queues.urls.transactions,
+          MaxNumberOfMessages: 10,
+          WaitTimeSeconds: 1,
+          MessageSystemAttributeNames: ['ApproximateReceiveCount'],
+        }),
+      );
+      stolen.push(...Messages.map((m) => m.Attributes?.ApproximateReceiveCount));
+    }
+    // O processamento passou de duas vezes a visibilidade.
+    expect(Date.now() - receivedAt).toBeGreaterThan(4_000);
+
+    await waitDrained();
+    expect(stolen).toEqual([]);
+    expect(await balanceOf(wallet.walletId)).toBe('90.00');
+    const [{ total }] = await db.sql`SELECT count(*)::int AS total FROM inbox_messages`;
+    expect(total).toBe(1);
+    expect(await expectQueueEmpty(queues.client, queues.urls.dlq)).toEqual([]);
+    await assertWalletMatchesLedger(db.sql, wallet.walletId);
+  }, 30_000);
+
+  test('grupos diferentes do lote rodam em paralelo; dentro do grupo, em série e na ordem de envio', async () => {
+    await setup();
+    const slow = await seedWallet(db.sql, { balance: '100.00' });
+    const fast = await seedWallet(db.sql, { balance: '100.00' });
+    const ordered = ['10.00', '20.00', '30.00'].map((amount) =>
+      transactionMessage(slow, { money: { amount, currency: 'BRL' } }),
+    );
+    const other = transactionMessage(fast);
+    // Tudo enviado antes de o consumidor subir, para cair no mesmo lote.
+    for (const message of ordered) await send(message, slow.walletId);
+    await send(other, fast.walletId);
+
+    const lock = await holdWallet(slow.walletId);
+    await startConsumer({ CONSUMER_VISIBILITY_TIMEOUT_S: '60' });
+    try {
+      // A wallet travada prende só o próprio grupo: a outra é processada enquanto isso.
+      await eventually(async () => expect(await lockWaiters()).toBe(1), { timeout: 10_000 });
+      await eventually(async () =>
+        expect(await transactionByExternalId(other.data.externalTransactionId)).toMatchObject({ status: 'PROCESSED' }),
+      );
+      expect(await transactionByExternalId(ordered[0]!.data.externalTransactionId)).toBeUndefined();
+    } finally {
+      await lock.release();
+    }
+
+    await waitDrained();
+    const balances = [];
+    for (const message of ordered) balances.push((await transactionByExternalId(message.data.externalTransactionId)).balance);
+    // Saldos resultantes na sequência de envio: 100 → 90 → 70 → 40.
+    expect(balances).toEqual(['90.00', '70.00', '40.00']);
+    expect(await balanceOf(fast.walletId)).toBe('90.00');
+    await assertWalletMatchesLedger(db.sql, slow.walletId);
+    await assertWalletMatchesLedger(db.sql, fast.walletId);
+  });
+
+  test('shutdown com vários grupos: conclui a mensagem em andamento de cada grupo e devolve as demais', async () => {
+    await setup();
+    const walletA = await seedWallet(db.sql, { balance: '100.00' });
+    const walletB = await seedWallet(db.sql, { balance: '100.00' });
+    const groupA = [transactionMessage(walletA), transactionMessage(walletA)];
+    const groupB = [transactionMessage(walletB), transactionMessage(walletB)];
+    for (const message of groupA) await send(message, walletA.walletId);
+    for (const message of groupB) await send(message, walletB.walletId);
+
+    const lockA = await holdWallet(walletA.walletId);
+    const lockB = await holdWallet(walletB.walletId);
+    const app = await startConsumer({ CONSUMER_VISIBILITY_TIMEOUT_S: '60' });
+    // As primeiras mensagens dos dois grupos estão em andamento ao mesmo tempo.
+    await eventually(async () => expect(await lockWaiters()).toBe(2), { timeout: 10_000 });
+
+    const closing = app.close();
+    apps.splice(apps.indexOf(app), 1);
+    await lockA.release();
+    await lockB.release();
+    await closing;
+
+    for (const first of [groupA[0]!, groupB[0]!]) {
+      expect(await transactionByExternalId(first.data.externalTransactionId)).toMatchObject({ status: 'PROCESSED' });
+    }
+    for (const rest of [groupA[1]!, groupB[1]!]) {
+      expect(await transactionByExternalId(rest.data.externalTransactionId)).toBeUndefined();
+    }
+    const returned = await receiveMessages(queues.client, queues.urls.transactions, { expected: 2, timeoutMs: 5_000 });
+    expect(returned.map((m) => bodyOf(m).messageId).sort()).toEqual([groupA[1]!.messageId, groupB[1]!.messageId].sort());
     expect(returned.every((m) => m.Attributes?.ApproximateReceiveCount === '2')).toBe(true);
   });
 });

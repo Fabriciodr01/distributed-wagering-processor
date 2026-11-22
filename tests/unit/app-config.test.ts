@@ -47,4 +47,12 @@ describe('loadConfig', () => {
       loadConfig({ ...minimal, NODE_ENV: 'test', FAULT_KILL_AFTER_COMMIT: '1' }).faults.killAfterCommit,
     ).toBe(true);
   });
+
+  test('o gancho FAULT_PROCESSING_DELAY_MS só vale com NODE_ENV=test', () => {
+    expect(loadConfig(minimal).faults.processingDelayMs).toBe(0);
+    expect(loadConfig({ ...minimal, FAULT_PROCESSING_DELAY_MS: '5000' }).faults.processingDelayMs).toBe(0);
+    expect(
+      loadConfig({ ...minimal, NODE_ENV: 'test', FAULT_PROCESSING_DELAY_MS: '5000' }).faults.processingDelayMs,
+    ).toBe(5000);
+  });
 });
