@@ -1,13 +1,13 @@
-import { ListQueuesCommand } from '@aws-sdk/client-sqs';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { ListQueuesCommand } from '@aws-sdk/client-sqs';
 import { loadConfig } from '../../src/config/app-config';
 import type { ReadinessReport } from '../../src/infrastructure/observability/readiness.service';
 import { runMigrations } from '../../src/infrastructure/persistence/migrate';
 import { spawnInstance } from '../support/spawn-instance';
+import { startTestApp, type TestApp } from '../support/test-app';
 import { buildTestConfig, testEnvVars } from '../support/test-config';
 import { createTestDatabase, type TestDatabase } from '../support/test-database';
 import { createTestQueues, type TestQueues } from '../support/test-queues';
-import { startTestApp, type TestApp } from '../support/test-app';
 
 describe('infraestrutura de teste', () => {
   let db: TestDatabase;

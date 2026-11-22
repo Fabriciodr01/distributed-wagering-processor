@@ -1,7 +1,7 @@
 import type { SQSClient } from '@aws-sdk/client-sqs';
 import { type QueueNames, SQS_MAX_RECEIVE_COUNT } from '../../src/config/app-config';
-import { createSqsClient } from '../../src/infrastructure/sqs/sqs-client';
 import { deleteQueues, ensureQueues, type QueueUrls } from '../../src/infrastructure/sqs/queue-setup';
+import { createSqsClient } from '../../src/infrastructure/sqs/sqs-client';
 import { testInfra, uniqueSuffix } from './test-env';
 
 export interface TestQueues {

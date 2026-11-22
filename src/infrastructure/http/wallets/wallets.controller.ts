@@ -3,8 +3,8 @@ import { CreateWalletUseCase } from '../../../application/wallets/create-wallet.
 import { GetWalletUseCase } from '../../../application/wallets/get-wallet.usecase';
 import { ListWalletLedgerUseCase } from '../../../application/wallets/list-wallet-ledger.usecase';
 import { ReconcileWalletUseCase } from '../../../application/wallets/reconcile-wallet.usecase';
-import { ProviderAuthGuard } from '../auth/provider-auth.guard';
 import { walletIdParamSchema } from '../../contracts/common.schemas';
+import { ProviderAuthGuard } from '../auth/provider-auth.guard';
 import { ZodValidationPipe } from '../validation/zod-validation.pipe';
 import {
   type LedgerEntryResponse,

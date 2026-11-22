@@ -1,6 +1,6 @@
 import { loadConfig, SQS_MAX_RECEIVE_COUNT } from '../src/config/app-config';
-import { createSqsClient } from '../src/infrastructure/sqs/sqs-client';
 import { ensureQueues } from '../src/infrastructure/sqs/queue-setup';
+import { createSqsClient } from '../src/infrastructure/sqs/sqs-client';
 
 const config = loadConfig();
 const client = createSqsClient(config.sqs);

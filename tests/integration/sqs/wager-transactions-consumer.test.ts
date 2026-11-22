@@ -1,5 +1,5 @@
-import { ReceiveMessageCommand } from '@aws-sdk/client-sqs';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { ReceiveMessageCommand } from '@aws-sdk/client-sqs';
 import { assertWalletMatchesLedger } from '../../support/assert-wallet-matches-ledger';
 import { eventually } from '../../support/eventually';
 import { httpClient } from '../../support/http';

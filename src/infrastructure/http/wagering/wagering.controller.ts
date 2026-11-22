@@ -5,10 +5,15 @@ import { ID_GENERATOR, type IdGenerator } from '../../../application/ports/id-ge
 import type { ProviderIdentity } from '../../../application/ports/provider-identity.port';
 import { GetWagerTransactionUseCase } from '../../../application/wagering/get-wager-transaction.usecase';
 import { ProcessWagerTransactionUseCase } from '../../../application/wagering/process-wager-transaction.usecase';
+import { uuidSchema } from '../../contracts/common.schemas';
+import {
+  idempotencyKeySchema,
+  type WagerTransactionPayload,
+  wagerTransactionPayloadSchema,
+} from '../../contracts/wager-transaction.contract';
+import { addLogContext, currentLogContext } from '../../observability/log-context';
 import { assertCanActAs, CurrentProvider, ProviderAuthGuard } from '../auth/provider-auth.guard';
 import { RequestValidationError } from '../errors/request-validation.error';
-import { uuidSchema } from '../../contracts/common.schemas';
-import { addLogContext, currentLogContext } from '../../observability/log-context';
 import { ZodValidationPipe } from '../validation/zod-validation.pipe';
 import {
   presentSubmission,
@@ -17,11 +22,6 @@ import {
   submissionStatus,
   type TransactionResponse,
 } from './wager-transaction.presenter';
-import {
-  idempotencyKeySchema,
-  type WagerTransactionPayload,
-  wagerTransactionPayloadSchema,
-} from '../../contracts/wager-transaction.contract';
 
 @Controller()
 @UseGuards(ProviderAuthGuard)

@@ -1,5 +1,5 @@
-import { CreateQueueCommand, DeleteQueueCommand } from '@aws-sdk/client-sqs';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { CreateQueueCommand, DeleteQueueCommand } from '@aws-sdk/client-sqs';
 import { CLOCK, type Clock } from '../../../src/application/ports/clock.port';
 import { ID_GENERATOR, type IdGenerator } from '../../../src/application/ports/id-generator.port';
 import { OUTBOX_STORE, type OutboxStore } from '../../../src/application/ports/outbox.port';

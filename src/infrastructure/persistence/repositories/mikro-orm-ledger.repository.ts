@@ -1,9 +1,9 @@
 import type { SqlEntityManager } from '@mikro-orm/postgresql';
 import type {
   LedgerPage,
-  LedgerSummary,
   LedgerPageQuery,
   LedgerRepository,
+  LedgerSummary,
 } from '../../../application/ports/repositories.port';
 import { Money } from '../../../domain/money';
 import type { WalletLedgerEntry } from '../../../domain/wallet-ledger-entry';

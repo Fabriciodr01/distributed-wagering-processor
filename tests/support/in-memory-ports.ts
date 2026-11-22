@@ -1,7 +1,6 @@
 import { WalletAlreadyExistsError } from '../../src/application/errors';
 import type { Clock } from '../../src/application/ports/clock.port';
 import type { IdGenerator } from '../../src/application/ports/id-generator.port';
-import type { Telemetry } from '../../src/application/ports/telemetry.port';
 import type {
   InboxRepository,
   LedgerPage,
@@ -13,8 +12,10 @@ import type {
   WagerTransactionRepository,
   WalletRepository,
 } from '../../src/application/ports/repositories.port';
+import type { Telemetry } from '../../src/application/ports/telemetry.port';
 import type { TransactionScope, UnitOfWork, UnitOfWorkOptions } from '../../src/application/ports/unit-of-work.port';
 import { InboxMessage, type InboxMessageState } from '../../src/domain/inbox-message';
+import { Money } from '../../src/domain/money';
 import type { OutboxMessage } from '../../src/domain/outbox-message';
 import {
   WagerTransaction,
@@ -24,7 +25,6 @@ import {
 } from '../../src/domain/wager-transaction';
 import { Wallet, type WalletState } from '../../src/domain/wallet';
 import { LedgerDirection, type WalletLedgerEntry } from '../../src/domain/wallet-ledger-entry';
-import { Money } from '../../src/domain/money';
 
 /**
  * Portas em memória para testes de UNIDADE do caso de uso: isolam a orquestração e a

@@ -5,7 +5,7 @@ import {
   Logger,
   type OnApplicationBootstrap,
 } from '@nestjs/common';
-import { PublishOutboxUseCase, type PublishOutboxResult } from '../../application/outbox/publish-outbox.usecase';
+import { type PublishOutboxResult, PublishOutboxUseCase } from '../../application/outbox/publish-outbox.usecase';
 import type { AppConfig } from '../../config/app-config';
 import { APP_CONFIG } from '../../config/config.module';
 import { PollingLoop } from './polling-loop';

@@ -1,6 +1,6 @@
 import { Global, Module } from '@nestjs/common';
-import { CLOCK, type Clock } from '../application/ports/clock.port';
 import { PublishOutboxUseCase } from '../application/outbox/publish-outbox.usecase';
+import { CLOCK, type Clock } from '../application/ports/clock.port';
 import { ID_GENERATOR, type IdGenerator } from '../application/ports/id-generator.port';
 import {
   EVENT_PUBLISHER,

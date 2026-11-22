@@ -1,6 +1,6 @@
 import { InvalidMessageStateError } from './errors';
-import type { IntegrationEvent } from './events/integration-event';
 import { deepFreeze } from './events/deep-freeze';
+import type { IntegrationEvent } from './events/integration-event';
 
 export interface OutboxMessageState {
   readonly id: string;

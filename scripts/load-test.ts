@@ -488,9 +488,9 @@ async function environment(): Promise<string> {
 function analysis(results: readonly ScenarioResult[]): string {
   const [hot, spread, dups] = results;
   const rate = (result?: ScenarioResult) => (result ? result.requests / result.durationS : 0);
-  const hotWait = hot && hot.metrics.lockWaitCount ? (hot.metrics.lockWaitSum / hot.metrics.lockWaitCount) * 1000 : 0;
+  const hotWait = hot?.metrics.lockWaitCount ? (hot.metrics.lockWaitSum / hot.metrics.lockWaitCount) * 1000 : 0;
   const spreadWait =
-    spread && spread.metrics.lockWaitCount ? (spread.metrics.lockWaitSum / spread.metrics.lockWaitCount) * 1000 : 0;
+    spread?.metrics.lockWaitCount ? (spread.metrics.lockWaitSum / spread.metrics.lockWaitCount) * 1000 : 0;
   return [
     `A hot wallet fez ${rate(hot).toFixed(1)} req/s, contra ${rate(spread).toFixed(1)} req/s com as apostas espalhadas em ` +
       `${SPREAD_WALLETS} wallets. A diferença é esperada e é escolha de desenho (ARCHITECTURE.md, D-04): toda transação ` +

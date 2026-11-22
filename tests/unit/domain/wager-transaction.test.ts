@@ -3,10 +3,10 @@ import { InvalidTransactionStateError, InvalidWagerTransactionError } from '../.
 import { FailureCode } from '../../../src/domain/failure-code';
 import {
   canTransition,
-  OPENING_PROVIDER_ID,
-  WagerTransaction,
   WagerTransactionKind as Kind,
+  OPENING_PROVIDER_ID,
   WagerTransactionStatus as Status,
+  WagerTransaction,
 } from '../../../src/domain/wager-transaction';
 import { LedgerDirection } from '../../../src/domain/wallet-ledger-entry';
 import { brl, newTransaction, nextId, processed, T0, txProps, usd } from '../../support/domain-fixtures';

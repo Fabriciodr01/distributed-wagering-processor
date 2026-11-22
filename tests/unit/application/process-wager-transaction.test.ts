@@ -7,8 +7,8 @@ import {
   TransientFailureError,
   WalletNotFoundError,
 } from '../../../src/application/errors';
-import type { ProcessWagerTransactionCommand } from '../../../src/application/wagering/wager-transaction-command';
 import { ProcessWagerTransactionUseCase } from '../../../src/application/wagering/process-wager-transaction.usecase';
+import type { ProcessWagerTransactionCommand } from '../../../src/application/wagering/wager-transaction-command';
 import { FailureCode } from '../../../src/domain/failure-code';
 import { Money } from '../../../src/domain/money';
 import { WagerTransactionKind as Kind, WagerTransactionStatus as Status } from '../../../src/domain/wager-transaction';

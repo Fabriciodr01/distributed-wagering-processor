@@ -1,12 +1,11 @@
+import type { SQSClient } from '@aws-sdk/client-sqs';
 import { Global, Inject, Module, type OnApplicationShutdown } from '@nestjs/common';
 import { EVENT_PUBLISHER } from '../../application/ports/outbox.port';
-import type { SQSClient } from '@aws-sdk/client-sqs';
 import type { AppConfig } from '../../config/app-config';
 import { APP_CONFIG } from '../../config/config.module';
-import { createSqsClient } from './sqs-client';
 import { SQS_CLIENT } from './sqs.tokens';
+import { createSqsClient } from './sqs-client';
 import { SqsEventPublisher } from './sqs-event-publisher';
-
 
 @Global()
 @Module({

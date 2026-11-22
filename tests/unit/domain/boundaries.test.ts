@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { Glob } from 'bun';
 import { resolve } from 'node:path';
+import { Glob } from 'bun';
 
 const ROOT = resolve(import.meta.dir, '../../..');
 
