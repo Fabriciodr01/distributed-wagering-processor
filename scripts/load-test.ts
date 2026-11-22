@@ -2,15 +2,17 @@
  * Teste de carga (bônus do enunciado): `bun run test:load`.
  *
  * Autocontido: usa a infraestrutura de teste (`bun run infra:test:up`), cria um banco e filas
- * próprios, sobe 3 instâncias da aplicação em processos separados e dispara três cenários:
+ * próprios, sobe 3 instâncias da aplicação em processos separados e dispara quatro cenários:
  *   (a) hot wallet  — muitas apostas concorrentes numa única wallet;
  *   (b) espalhado   — M wallets × K apostas;
- *   (c) duplicatas  — 10% das requisições são reenvios idênticos (mesma Idempotency-Key).
+ *   (c) duplicatas  — 10% das requisições são reenvios idênticos (mesma Idempotency-Key);
+ *   (d) hot wallet com o dobro da concorrência do cliente, para ver onde o lock_timeout começa.
  * No fim confere saldo = ledger em todas as wallets e a reconciliação de cada uma, imprime uma
  * tabela Markdown e grava `load-test-report.md`. Sai com código 1 se alguma invariante falhar.
  *
  * Parâmetros por env: LOAD_INSTANCES (3), LOAD_CONCURRENCY (48), LOAD_HOT_REQUESTS (600),
- * LOAD_SPREAD_WALLETS (40), LOAD_SPREAD_BETS (25), LOAD_DUP_REQUESTS (1000), LOAD_DB_POOL_MAX (10).
+ * LOAD_SPREAD_WALLETS (40), LOAD_SPREAD_BETS (25), LOAD_DUP_REQUESTS (1000), LOAD_DB_POOL_MAX (10),
+ * LOAD_DB_LOCK_TIMEOUT_MS (5000). O cenário (d) usa o dobro de LOAD_CONCURRENCY.
  */
 import { cpus, totalmem } from 'node:os';
 import { resolve } from 'node:path';
@@ -32,6 +34,8 @@ const SPREAD_WALLETS = env('LOAD_SPREAD_WALLETS', 40);
 const SPREAD_BETS = env('LOAD_SPREAD_BETS', 25);
 const DUP_REQUESTS = env('LOAD_DUP_REQUESTS', 1000);
 const DB_POOL_MAX = env('LOAD_DB_POOL_MAX', 10);
+/** O mesmo padrão da aplicação (`DB_LOCK_TIMEOUT_MS`); as instâncias sobem com este valor. */
+const LOCK_TIMEOUT_MS = env('LOAD_DB_LOCK_TIMEOUT_MS', 5000);
 const REPORT_PATH = resolve(import.meta.dir, '..', 'load-test-report.md');
 
 interface Wallet {
@@ -48,6 +52,8 @@ interface Request {
 interface Sample {
   readonly status: number;
   readonly ms: number;
+  /** Quando a resposta chegou, em ms desde o início do cenário. */
+  readonly at: number;
   readonly replay: boolean;
   readonly outcome: string;
 }
@@ -64,6 +70,7 @@ interface ScenarioResult {
   readonly name: string;
   readonly description: string;
   readonly requests: number;
+  readonly concurrency: number;
   readonly durationS: number;
   readonly samples: readonly Sample[];
   readonly metrics: MetricsSnapshot;
@@ -106,6 +113,7 @@ async function setUp(): Promise<void> {
     overrides: {
       NODE_ENV: 'production',
       DB_POOL_MAX: String(DB_POOL_MAX),
+      DB_LOCK_TIMEOUT_MS: String(LOCK_TIMEOUT_MS),
       RUN_CONSUMER: 'false',
       RUN_OUTBOX_PUBLISHER: 'true',
       RUN_PENDING_REFERENCE_WORKER: 'true',
@@ -164,7 +172,7 @@ function bet(wallet: Wallet, amount: string, instance: number): Request {
   };
 }
 
-async function submit(request: Request): Promise<Sample> {
+async function submit(request: Request, scenarioStart: number): Promise<Sample> {
   const startedAt = performance.now();
   try {
     const res = await fetch(`${instances[request.instance % INSTANCES]!.baseUrl}/wagering/transactions`, {
@@ -172,30 +180,41 @@ async function submit(request: Request): Promise<Sample> {
       headers: { 'content-type': 'application/json', 'idempotency-key': request.key },
       body: JSON.stringify(request.body),
     });
-    const body = (await res.json().catch(() => ({}))) as { status?: string; failureCode?: string; idempotentReplay?: boolean };
+    const body = (await res.json().catch(() => ({}))) as {
+      status?: string;
+      failureCode?: string;
+      idempotentReplay?: boolean;
+      error?: { code?: string };
+    };
+    const now = performance.now();
     return {
       status: res.status,
-      ms: performance.now() - startedAt,
+      ms: now - startedAt,
+      at: now - scenarioStart,
       replay: body.idempotentReplay === true,
-      outcome: body.failureCode ?? body.status ?? 'ERROR',
+      outcome: body.failureCode ?? body.status ?? body.error?.code ?? 'ERROR',
     };
   } catch {
-    return { status: 0, ms: performance.now() - startedAt, replay: false, outcome: 'NETWORK_ERROR' };
+    const now = performance.now();
+    return { status: 0, ms: now - startedAt, at: now - scenarioStart, replay: false, outcome: 'NETWORK_ERROR' };
   }
 }
 
-/** Executa as requisições com no máximo `CONCURRENCY` em voo, na ordem dada. */
-async function runPool(requests: readonly Request[]): Promise<{ samples: Sample[]; durationS: number }> {
+/** Executa as requisições com no máximo `concurrency` em voo, na ordem dada. */
+async function runPool(
+  requests: readonly Request[],
+  concurrency: number,
+): Promise<{ samples: Sample[]; durationS: number }> {
   const samples: Sample[] = new Array(requests.length);
   let next = 0;
   const startedAt = performance.now();
   await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, requests.length) }, async () => {
+    Array.from({ length: Math.min(concurrency, requests.length) }, async () => {
       for (;;) {
         const index = next;
         next += 1;
         if (index >= requests.length) return;
-        samples[index] = await submit(requests[index]!);
+        samples[index] = await submit(requests[index]!, startedAt);
       }
     }),
   );
@@ -307,13 +326,24 @@ async function scenario(
   name: string,
   description: string,
   build: () => Promise<Request[]>,
+  concurrency = CONCURRENCY,
 ): Promise<ScenarioResult> {
   const requests = await build();
   const before = await snapshot();
-  const { result, lagPeakS, drainS } = await withLagSampling(() => runPool(requests));
+  const { result, lagPeakS, drainS } = await withLagSampling(() => runPool(requests, concurrency));
   const metrics = diff(await snapshot(), before);
   console.log(`  ${name}: ${requests.length} requisições em ${result.durationS.toFixed(2)} s`);
-  return { name, description, requests: requests.length, durationS: result.durationS, samples: result.samples, metrics, lagPeakS, drainS };
+  return {
+    name,
+    description,
+    requests: requests.length,
+    concurrency,
+    durationS: result.durationS,
+    samples: result.samples,
+    metrics,
+    lagPeakS,
+    drainS,
+  };
 }
 
 const scenarios: Array<() => Promise<ScenarioResult>> = [
@@ -346,6 +376,16 @@ const scenarios: Array<() => Promise<ScenarioResult>> = [
       }
       return requests;
     }),
+  () =>
+    scenario(
+      '(d) hot wallet 2×',
+      `${HOT_REQUESTS} apostas de 0.01 numa única wallet com ${CONCURRENCY * 2} requisições em voo (o dobro de (a))`,
+      async () => {
+        const wallet = await createWallet('1000.00');
+        return Array.from({ length: HOT_REQUESTS }, (_, i) => bet(wallet, '0.01', i));
+      },
+      CONCURRENCY * 2,
+    ),
 ];
 
 // ------------------------------------------------------------------ invariantes
@@ -384,12 +424,22 @@ function countBy<T>(items: readonly T[], key: (item: T) => string): string {
   return [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}: ${v}`).join(', ');
 }
 
+/** Primeiro 503 do cenário, pela ordem de chegada da resposta. */
+function first503(result: ScenarioResult): string {
+  const unavailable = result.samples.filter((sample) => sample.status === 503).sort((a, b) => a.at - b.at);
+  const first = unavailable[0];
+  if (!first) return 'nenhum';
+  const answeredBefore = result.samples.filter((sample) => sample.at < first.at).length;
+  return `após ${answeredBefore} respostas (t = ${formatMs(first.at)}); ${unavailable.length} no total`;
+}
+
 function row(result: ScenarioResult): Record<string, string> {
   const latencies = result.samples.map((sample) => sample.ms).sort((a, b) => a - b);
   const errors = result.samples.filter((sample) => sample.status === 0 || sample.status >= 500).length;
   const { metrics } = result;
   return {
     Cenário: result.name,
+    'Requisições em voo (cliente)': String(result.concurrency),
     Requisições: String(result.requests),
     Duração: `${result.durationS.toFixed(2)} s`,
     Throughput: `${(result.requests / result.durationS).toFixed(1)} req/s`,
@@ -403,6 +453,8 @@ function row(result: ScenarioResult): Record<string, string> {
     'Conflitos de lock (timeout/deadlock)': `${metrics.lockTimeouts} / ${metrics.deadlocks}`,
     'Espera do lock: média': metrics.lockWaitCount ? formatMs((metrics.lockWaitSum / metrics.lockWaitCount) * 1000) : '—',
     'Espera do lock: p95 (bucket)': bucketQuantile(metrics, 0.95),
+    'Espera do lock: máx (bucket)': bucketQuantile(metrics, 1),
+    'Primeiro 503': first503(result),
     'Lag da outbox (pico)': `${result.lagPeakS.toFixed(2)} s`,
     'Tempo para drenar a outbox': formatMs(result.drainS * 1000),
   };
@@ -425,7 +477,7 @@ async function environment(): Promise<string> {
   const cpu = cpus();
   return [
     `- **Data:** ${new Date().toISOString()}`,
-    `- **CPU:** ${cpu[0]?.model ?? 'desconhecida'} × ${cpu.length} núcleos; memória ${(totalmem() / 2 ** 30).toFixed(1)} GiB`,
+    `- **CPU:** ${cpu[0]?.model.trim().replace(/\s+/g, ' ') ?? 'desconhecida'} × ${cpu.length} núcleos; memória ${(totalmem() / 2 ** 30).toFixed(1)} GiB`,
     `- **Bun:** ${Bun.version}; **PostgreSQL:** ${String(version).split(' on ')[0]}; **MiniStack:** ${ministack}`,
     `- **Instâncias:** ${INSTANCES} processos (HTTP + publisher da outbox + worker), pool de ${DB_POOL_MAX} conexões cada`,
     `- **Concorrência do cliente:** ${CONCURRENCY} requisições em voo, distribuídas em rodízio entre as instâncias`,
@@ -456,8 +508,61 @@ function analysis(results: readonly ScenarioResult[]): string {
           'replay (mesmo resultado, sem segundo débito), atendidos pela mesma transação curta do caminho normal.'
         : ''),
     '',
-    'A outbox é publicada por três publishers concorrentes (lease + `SKIP LOCKED`); o lag sobe durante a rajada e ' +
-      'volta a zero logo depois dela, no tempo de drenagem da tabela.',
+    'A outbox é publicada por três publishers concorrentes (lease + `SKIP LOCKED`; ordem por wallet best effort, ' +
+      'D-08); o lag sobe durante a rajada e volta a zero logo depois dela, no tempo de drenagem da tabela. ' +
+      (hot ? `Na hot wallet a drenagem levou ${formatMs(hot.drainS * 1000)} em (a).` : ''),
+    '',
+    lockTimeoutAnalysis(hot, results[3]),
+  ].join('\n');
+}
+
+/** Cenário (d): onde o 503 por lock_timeout começa, e por que `DB_LOCK_TIMEOUT_MS` é 5 s. */
+function lockTimeoutAnalysis(hot?: ScenarioResult, hot2x?: ScenarioResult): string {
+  if (!hot || !hot2x) return '';
+  const lockTimeoutS = LOCK_TIMEOUT_MS / 1000;
+  const waiters = INSTANCES * DB_POOL_MAX;
+  // Tempo de uma transação com o lock ≈ 1 / throughput da hot wallet (as transações dela são serializadas).
+  const holdMs = (hot2x.durationS / hot2x.requests) * 1000;
+  const onsetWaiters = Math.ceil(LOCK_TIMEOUT_MS / holdMs);
+  const unavailable = hot2x.samples.filter((sample) => sample.status === 503).length;
+  const p99 = (result: ScenarioResult) =>
+    formatMs(percentile([...result.samples.map((sample) => sample.ms)].sort((a, b) => a - b), 0.99));
+  const measured =
+    unavailable === 0 && hot2x.metrics.lockTimeouts === 0
+      ? `Com o dobro da concorrência do cliente (${hot2x.concurrency} em voo, cenário (d)) **não houve 503**: ` +
+        `0 lock_timeout, espera máxima pelo lock ${bucketQuantile(hot2x.metrics, 1)} (bucket). O throughput foi ` +
+        `${(hot2x.requests / hot2x.durationS).toFixed(1)} req/s (contra ${(hot.requests / hot.durationS).toFixed(1)} em (a)) e ` +
+        `o p99 ${p99(hot2x)} (contra ${p99(hot)}). Essa comparação não isola a concorrência: (a) é o primeiro ` +
+        'cenário e roda com as instâncias frias (JIT e pools de conexão ainda aquecendo), e (d) é o último. O que ' +
+        '(d) mostra com segurança é que dobrar a concorrência do cliente não gerou 503 nem aumentou a espera pelo lock.'
+      : `Com o dobro da concorrência do cliente (${hot2x.concurrency} em voo, cenário (d)) apareceram **${unavailable} ` +
+        `respostas 503** (${hot2x.metrics.lockTimeouts} lock_timeout nas métricas); primeiro 503: ${first503(hot2x)}.`;
+  return [
+    measured,
+    '',
+    `A espera pelo lock não cresce junto com a concorrência do cliente. No máximo ${INSTANCES} instâncias × ` +
+      `${DB_POOL_MAX} conexões = ${waiters} transações podem estar na fila do lock da mesma wallet ao mesmo tempo, ` +
+      'porque cada uma ocupa uma conexão do pool. As demais requisições esperam por uma conexão dentro da ' +
+      'aplicação, sem segurar lock nenhum, e essa espera não conta para o `lock_timeout`. O 503 por lock_timeout ' +
+      `só começa quando uma única transação espera mais que ${lockTimeoutS} s, ou seja, quando (transações na frente ` +
+      `dela) × (tempo de cada uma com o lock) > ${lockTimeoutS} s. Medido aqui, cada transação da hot wallet segura ` +
+      `o lock por ≈ ${formatMs(holdMs)}, então seriam precisas ≈ ${onsetWaiters} esperas simultâneas, bem acima das ` +
+      `${waiters} que o pool permite. Na prática, o 503 aparece se o pool total crescer muito (mais instâncias × ` +
+      'conexões numa wallet só) ou se a transação ficar lenta (Postgres saturado, ou uma sessão segurando o lock).',
+    '',
+    `**Por que ${lockTimeoutS} s.** É o teto de quanto uma transação aceita esperar pela linha da wallet:`,
+    `- **folga para a contenção normal:** na hot wallet a espera pelo lock fica em ${bucketQuantile(hot.metrics, 0.95)} ` +
+      `no p95 e a maior foi ${bucketQuantile(hot.metrics, 1)} em (a) e ${bucketQuantile(hot2x.metrics, 1)} em (d). ` +
+      `Com ${lockTimeoutS} s, ` +
+      'disputa normal nunca vira 503. Um limite apertado (ex.: 500 ms) transformaria fila em erro, e cada 503 volta ' +
+      'como reenvio do provedor, aumentando a carga na mesma wallet;',
+    '- **teto para o caso anormal:** se uma sessão segura o lock por muito tempo, quem espera desiste em ' +
+      `${lockTimeoutS} s, devolve a conexão ao pool e recebe 503 com \`Retry-After\`. Sem esse teto, uma wallet ` +
+      'travada prenderia conexões do pool indefinidamente e afetaria as outras wallets da instância;',
+    '- **cabe nos outros prazos:** fica bem abaixo do visibility timeout da fila (30 s) e do timeout típico de um ' +
+      'cliente HTTP, então a falha é transitória e explícita (retry com backoff) em vez de a mensagem expirar e ser ' +
+      'reentregue por baixo. E fica acima do `deadlock_timeout` do Postgres (1 s), então um deadlock real é ' +
+      'detectado e repetido (D-04) antes de o lock_timeout disparar.',
   ].join('\n');
 }
 

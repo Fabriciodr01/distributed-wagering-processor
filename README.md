@@ -74,7 +74,7 @@ bun run infra:test:up
 bun run test:load       # parâmetros por env: LOAD_CONCURRENCY, LOAD_HOT_REQUESTS, LOAD_SPREAD_WALLETS…
 ```
 
-O script sobe 3 instâncias em processos separados contra a infraestrutura de teste, roda os três cenários, confere saldo = ledger e a reconciliação de todas as wallets e grava [`load-test-report.md`](load-test-report.md) (ambiente, metodologia, throughput, p50/p95/p99, taxa de erro, replays, conflitos e espera de lock, lag e drenagem da outbox). O throughput de uma única wallet é limitado de propósito pelo lock da linha (ver `ARCHITECTURE.md`, D-05).
+O script sobe 3 instâncias em processos separados contra a infraestrutura de teste, roda os quatro cenários (hot wallet, espalhado, 10% de duplicatas e hot wallet com o dobro da concorrência, para ver onde o `lock_timeout` começa), confere saldo = ledger e a reconciliação de todas as wallets e grava [`load-test-report.md`](load-test-report.md) (ambiente, metodologia, throughput, p50/p95/p99, taxa de erro, replays, conflitos e espera de lock, lag e drenagem da outbox). O throughput de uma única wallet é limitado de propósito pelo lock da linha (ver `ARCHITECTURE.md`, D-04).
 
 ## Arquitetura
 
